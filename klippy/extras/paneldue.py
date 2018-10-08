@@ -40,7 +40,7 @@ class PanelDue:
         util.set_nonblock(self.fd)
         self.fd_handle = self.reactor.register_fd(self.fd, self.process_pd_data)
 
-        # TODO: Find a better way to intercept gcode responses to delay them to the PD.
+        # TODO: Find a better way to intercept gcode responses to relay them to the PD.
         self.gcode.respond = self.gcode_respond_override
 
         # Add BUILD_RESPONSE command
