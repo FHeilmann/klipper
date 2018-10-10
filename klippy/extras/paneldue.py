@@ -35,21 +35,6 @@ class PanelDue:
             # If no list supplied then list all registered commands
             self.macro_list = self.gcode.ready_gcode_handlers.keys()
 
-        logging.info("PanelDue initializing serial port " + self.serial_port + " at baudrate " + self.serial_baudrate)
-
-        self.ser = serial.Serial(
-            port=self.serial_port,
-            baudrate=int(self.serial_baudrate),
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            bytesize=serial.EIGHTBITS
-        )
-
-        self.fd = self.ser.fileno()
-        util.set_nonblock(self.fd)
-        self.fd_handle = self.reactor.register_fd(self.fd, self.process_pd_data)
-
-        self.gcode.register_respond_callback(self.gcode_respond_callback)
         # Add BUILD_RESPONSE command
 
         self.gcode.register_command(
@@ -119,12 +104,12 @@ class PanelDue:
                     "resp":info.strip(),
                     "seq":self.info_message_sequence
                 }
-                self.ser.write(json.dumps(infoMsg))
+                self.ser.write(json.dumps(infoMsg) + '\r\n')
         elif msg.find("!!") == 0:
             errorMsg = {"message":msg[2:]}
-            self.ser.write(json.dumps(errorMsg))
+            self.ser.write(json.dumps(errorMsg) + '\r\n')
         elif msg.find("{") == 0:
-            self.ser.write(msg)
+            self.ser.write(msg + '\r\n')
 
     def process_pd_data(self, eventtime):
 
@@ -233,7 +218,7 @@ class PanelDue:
         response['myName'] = "Klipper"
         response['firmwareName'] = "Klipper for Duet 2 WiFi/Ethernet"
         #TODO: fix
-        response['numTools'] = 1
+        #response['numTools'] = 1
 
         if bed is not None:
             status = bed.get_status(now)
@@ -257,6 +242,28 @@ class PanelDue:
             variant = self.gcode.get_int('VARIANT', params, minval=0, maxval=3)
         logging.info('BUILD_RESPONSE executed with variant {}'.format(variant))
         self.gcode.respond(json_response)
+
+    def printer_state(self, state):
+
+        logging.info("checking printer state")
+
+        if state == 'ready':
+
+            logging.info("PanelDue initializing serial port " + self.serial_port + " at baudrate " + self.serial_baudrate)
+
+            self.ser = serial.Serial(
+                port=self.serial_port,
+                baudrate=int(self.serial_baudrate),
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                bytesize=serial.EIGHTBITS
+            )
+
+            self.fd = self.ser.fileno()
+            util.set_nonblock(self.fd)
+            self.fd_handle = self.reactor.register_fd(self.fd, self.process_pd_data)
+
+            self.gcode.register_respond_callback(self.gcode_respond_callback)
 
 def load_config(config):
     return PanelDue(config)
