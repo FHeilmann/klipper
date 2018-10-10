@@ -1,43 +1,43 @@
 TODO
 =====
-[X] Home X, Y, Z, All
+1. [X] 1. Home X, Y, Z, All
 
-[X] G32 levelling
+2. [X] 2. G32 levelling
 
-[ ] M408 needs to implement type 2 (extended)
+3. [ ] 3. M408 needs to implement type 2 (extended)
 
-[ ] M408 needs to implement type 3 (print status)
+4. [ ] 4. M408 needs to implement type 3 (print status)
 
-[ ] M408 needs to identify proper number of tools
+5. [ ] 5. M408 needs to identify proper number of tools
 
-[ ] M408 needs to be able to report to PanelDue during active print. Currently get queued up until print finishes.
+6. [ ] 6. M408 needs to be able to report to PanelDue during active print. Currently get queued up until print finishes.
 
-[X] Set active bed temperature 
+7. [X] 7. Set active bed temperature 
 
-[X] Set standby bed temperature
+8. [X] 8. Set standby bed temperature
 
-[ ] Set active tool temperature (might work if we register proper # of tools)
+9. [ ] 9. Set active tool temperature (might work if we register proper # of tools)
 
-[ ] Set standby tool temperature (might work if we register proper # of tools)
+10. [ ] 10. Set standby tool temperature (might work if we register proper # of tools)
 
-[X] Log messages to console
+11. [X] 11. Log messages to console
 
-[X] View macros
+12. [X] 12. View macros
 
-[X] Execute macros
+13. [X] 13. Execute macros
 
-[X] Move commands
+14. [X] 14. Move commands
 
-[X] show SD card files (works when virtual SD card mapped)
+15. [X] 15. show SD card files (works when virtual SD card mapped)
 
-[X] start print from SD card
+16. [X] 16. start print from SD card
 
-[ ] show file stats (size, sliced by, etc)
+17. [ ] 17. show file stats (size, sliced by, etc)
 
-[ ] Pause print
+18. [ ] 18. Pause print
 
-[ ] Baby stepping
+19. [ ] 19. Baby stepping
 
-[ ] Cancel print
+20. [ ] 20. Cancel print
 
-[?] Extrusion settings (untested)
+21. [ ] 21. Extrusion settings (untested)
