@@ -1,12 +1,12 @@
-TODO
+fTODO
 =====
 1. [X] 1. Home X, Y, Z, All
 
 2. [X] 2. G32 levelling
 
-3. [ ] 3. M408 needs to implement type 2 (extended)
+3. [ ] 3. M408 needs to finish type 0 implementation
 
-4. [ ] 4. M408 needs to implement type 3 (print status)
+4. [ ] 4. M408 needs to implement type 1
 
 5. [ ] 5. M408 needs to identify proper number of tools
 
