@@ -51,9 +51,6 @@ class PanelDue:
         self.gcode.register_command(
             "M20", self.cmd_M20, desc=self.cmd_M20_help)
 
-        # Intialize the PanelDue to wake it up for the first time
-        self.queue_gcode("M408")
-
 
     def parse_pd_message (self, rawmsg):
 
@@ -264,6 +261,9 @@ class PanelDue:
             self.fd_handle = self.reactor.register_fd(self.fd, self.process_pd_data)
 
             self.gcode.register_respond_callback(self.gcode_respond_callback)
+
+            # Intialize the PanelDue to wake it up for the first time
+            self.queue_gcode("M408")
 
 def load_config(config):
     return PanelDue(config)
