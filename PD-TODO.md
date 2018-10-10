@@ -41,3 +41,7 @@ TODO
 20. [ ] 20. Cancel print
 
 21. [ ] 21. Extrusion settings (untested)
+
+22. [ ] 22. Extra Documentation. Make sure to mention 3.3V voltage Levels
+
+23. [ ] 23. Create a document that shows how to connect a PanelDue to the rpi onboard UART
