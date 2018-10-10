@@ -6,7 +6,7 @@ TODO
 
 [ ] M408 needs to implement type 2 (extended)
 
-[ ] M408 needs to implement type (print status)
+[ ] M408 needs to implement type 3 (print status)
 
 [ ] M408 needs to identify proper number of tools
 
