@@ -13,16 +13,29 @@ TODO
 [X] Set active bed temperature 
 
 [X] Set standby bed temperature
+
 [ ] Set active tool temperature (might work if we register proper # of tools)
+
 [ ] Set standby tool temperature (might work if we register proper # of tools)
+
 [X] Log messages to console
+
 [X] View macros
+
 [X] Execute macros
+
 [X] Move commands
+
 [X] show SD card files (works when virtual SD card mapped)
-[ ] show file stats (size, sliced by, etc)
-[ ] Pause print
-[ ] Baby stepping
-[ ] Cancel print
+
 [X] start print from SD card
+
+[ ] show file stats (size, sliced by, etc)
+
+[ ] Pause print
+
+[ ] Baby stepping
+
+[ ] Cancel print
+
 [?] Extrusion settings (untested)
