@@ -10,6 +10,8 @@ TODO
 
 [ ] M408 needs to identify proper number of tools
 
+[ ] M408 needs to be able to report to PanelDue during active print. Currently get queued up until print finishes.
+
 [X] Set active bed temperature 
 
 [X] Set standby bed temperature
