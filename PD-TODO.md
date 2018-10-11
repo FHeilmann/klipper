@@ -8,9 +8,9 @@ TODO
 
 4. [ ] 4. M408 needs to implement type 1
 
-5. [ ] 5. M408 needs to identify proper number of tools
+5. [X] 5. M408 needs to identify proper number of tools
 
-6. [ ] 6. M408 needs to be able to report to PanelDue during active print. Currently get queued up until print finishes.
+6. [X] 6. M408 needs to be able to report to PanelDue during active print. Currently get queued up until print finishes.
 
 7. [X] 7. Set active bed temperature 
 
@@ -34,7 +34,7 @@ TODO
 
 17. [ ] 17. show file stats (size, sliced by, etc)
 
-18. [ ] 18. Pause print
+18. [X] 18. Pause print
 
 19. [ ] 19. Baby stepping
 
@@ -45,3 +45,5 @@ TODO
 22. [ ] 22. Extra Documentation. Make sure to mention 3.3V voltage Levels
 
 23. [ ] 23. Create a document that shows how to connect a PanelDue to the rpi onboard UART
+
+24. [ ] 24. Have M408 detect "Paused" state so that PD can resume (note: Klipper is in "Ready" state)
