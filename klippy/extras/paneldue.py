@@ -8,8 +8,7 @@ import json
 import serial
 import logging
 import kinematics.extruder
-import util
-import os
+import util, os, re
 
 class PanelDue:
 
@@ -34,23 +33,6 @@ class PanelDue:
         except:
             # If no list supplied then list all registered commands
             self.macro_list = self.gcode.ready_gcode_handlers.keys()
-
-        # Add BUILD_RESPONSE command
-
-        self.gcode.register_command(
-            "M408", self.cmd_M408, desc=self.cmd_M408_help)
-
-        self.gcode.register_command(
-            "M32", self.cmd_M32, desc=self.cmd_M32_help)
-
-        self.gcode.register_command("M98", None)
-        self.gcode.register_command(
-            "M98", self.cmd_M98, desc=self.cmd_M98_help)
-
-        self.gcode.register_command("M20", None)
-        self.gcode.register_command(
-            "M20", self.cmd_M20, desc=self.cmd_M20_help)
-
 
     def parse_pd_message (self, rawmsg):
 
@@ -122,9 +104,26 @@ class PanelDue:
 
             if message:
                 logging.info ("executing " + message)
-                self.queue_gcode(message)
+                self.execute_command(message)
 
-        self.serialdata = readlines[-1]        
+        self.serialdata = readlines[-1]   
+
+    # Have any custom commands get executed directly
+    # and anything else get added to the gcode queue
+    def execute_command(self, command):
+
+        params = self.parse_params(command)
+
+        switcher = {
+            "M408": self.cmd_M408,
+            "M32": self.cmd_M32,
+            "M98": self.cmd_M98,
+            "M20": self.cmd_M20,
+            "M25": self.cmd_M25
+        }     
+
+        func = switcher.get(params['#command'], lambda x : self.queue_gcode(x["#original"]))
+        func(params)
 
     def queue_gcode(self, script):
         if script is None:
@@ -143,10 +142,34 @@ class PanelDue:
                 logging.exception("Script running error")
             self.gcode_queue.pop(0)
 
+    # maintain compatibility with regular registered commands
+    # by using the same param parsing as Gcode Parser
+    def parse_params(self, line):
+                    
+        args_r = re.compile('([A-Z_]+|[A-Z*/])')
+        
+        line = origline = line.strip()
+        cpos = line.find(';')
+        if cpos >= 0:
+            line = line[:cpos]
+        # Break command into parts
+        parts = args_r.split(line.upper())[1:]
+        params = { parts[i]: parts[i+1].strip()
+                    for i in range(0, len(parts), 2) }
+        params['#original'] = origline
+        if parts and parts[0] == 'N':
+            # Skip line number at start of command
+            del parts[:2]
+        if not parts:
+            # Treat empty line as empty command
+            parts = ['', '']
+        params['#command'] = cmd = parts[0] + parts[1].strip()
+
+        return params
+
     def build_config(self):
         pass
 
-    cmd_M32_help = "M32 response"
     def cmd_M32(self, params):
 
         path = params['#original'].replace("M32 ", "")
@@ -155,7 +178,12 @@ class PanelDue:
         self.queue_gcode("M24")
         logging.info("Starting SD Print: " + path)
 
-    cmd_M98_help = "M98 response"
+    def cmd_M25(self, params):
+
+        sdcard = self.printer.objects.get('virtual_sdcard')
+        if sdcard is not None:
+            sdcard.cmd_M25(params)
+
     def cmd_M98(self, params):
 
         path = ""
@@ -171,8 +199,6 @@ class PanelDue:
             logging.info("Executing macro " + macro)
             self.queue_gcode(macro)
 
-
-    cmd_M20_help = "M20 response"
     def cmd_M20(self, params):
 
         response = {}
@@ -202,20 +228,18 @@ class PanelDue:
         logging.info(json_response)
         self.gcode.respond(json_response)
 
-    cmd_M408_help = "M408 response"
     def cmd_M408(self, params):
         self.toolhead = self.printer.lookup_object("toolhead")
         now = self.reactor.monotonic()
         extruders = kinematics.extruder.get_printer_extruders(self.printer)
         bed = self.printer.lookup_object('heater_bed', None)
-        self.toolhead_status = self.toolhead.get_status(now)
-        logging.info(str(self.toolhead_status))
+        self.toolhead_info = self.toolhead.get_status(now)
+        logging.info(str(self.toolhead_info))
         response = {}
-        response['status'] = "P" if self.toolhead_status == "Printing" else "I"
+        response['status'] = "P" if self.toolhead_info['status'] == "Printing" else "I"
         response['myName'] = "Klipper"
         response['firmwareName'] = "Klipper for Duet 2 WiFi/Ethernet"
-        #TODO: fix
-        #response['numTools'] = 1
+        response['numTools'] = len(extruders)
 
         if bed is not None:
             status = bed.get_status(now)
