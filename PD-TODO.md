@@ -54,6 +54,6 @@ TODO
 
 27. [ ] 27. Have SD card listing only show .gcode files (add filter)
 
-28. [ ] 28. SD card - add ability to navigate into sub-folders
+28. [ ] 28. SD card - add ability to navigate into sub-folders. Note: May also affect "start print" command (M32)
 
 29. [ ] 28. Figure why bed standby temp doesn't update on PD (wrong mapping?)
