@@ -115,11 +115,13 @@ class PanelDue:
         params = self.parse_params(command)
 
         switcher = {
-            "M408": self.cmd_M408,
+            "M0": self.cmd_M0,
+            "M20": self.cmd_M20,
+            "M25": self.cmd_M25,
             "M32": self.cmd_M32,
             "M98": self.cmd_M98,
-            "M20": self.cmd_M20,
-            "M25": self.cmd_M25
+            "M290": self.cmd_M290,
+            "M408": self.cmd_M408
         }     
 
         func = switcher.get(params['#command'], lambda x : self.queue_gcode(x["#original"]))
@@ -178,6 +180,33 @@ class PanelDue:
         self.queue_gcode("M24")
         logging.info("Starting SD Print: " + path)
 
+    # Cancel Print
+    def cmd_M0(self, params):
+        sdcard = self.printer.objects.get('virtual_sdcard')
+        if sdcard is not None:
+            sdcard.work_timer = None
+            sdcard.must_pause_work = False
+            sdcard.current_file = None
+            sdcard.file_position = sdcard.file_size = 0
+
+        # Turn off all heaters
+        self.queue_gcode("TURN_OFF_HEATERS")
+
+    # Baby stepping
+    # PD issues a "M290 S#" which supplies relative steps
+    # Klipper's equivalent is "SET_GCODE_OFFSET Z#"" but takes absolute steps
+    # So some translation is required
+    def cmd_M290(self, params):
+
+        relative_babysteps = self.gcode.get_float('S', params)
+        gcode_status = self.gcode.get_status(self.reactor.monotonic())
+        current_babysteps = gcode_status['homing_zpos']
+        new_babysteps = current_babysteps + relative_babysteps
+
+        params = self.parse_params("SET_GCODE_OFFSET Z%0.2f" % new_babysteps)
+
+        self.gcode.cmd_SET_GCODE_OFFSET(params)     
+
     def cmd_M25(self, params):
 
         sdcard = self.printer.objects.get('virtual_sdcard')
@@ -228,18 +257,41 @@ class PanelDue:
         logging.info(json_response)
         self.gcode.respond(json_response)
 
+    def get_printer_status(self, now, gcode_status):
+
+        sdcard = self.printer.objects.get('virtual_sdcard')
+        if sdcard is not None:
+            if sdcard.must_pause_work:
+                # D = pausing, A = paused
+                return "D" if sdcard.work_timer is not None else "A"
+            if sdcard.current_file is not None and sdcard.work_timer is not None:
+                # Printing
+                return "P"
+
+        if gcode_status['busy']:
+            # B = busy
+            return "B"
+
+        toolhead_info = self.toolhead.get_status(now)
+        # P = printing, I = idle
+        return "P" if toolhead_info['status'] == "Printing" else "I"
+
     def cmd_M408(self, params):
         self.toolhead = self.printer.lookup_object("toolhead")
         now = self.reactor.monotonic()
         extruders = kinematics.extruder.get_printer_extruders(self.printer)
         bed = self.printer.lookup_object('heater_bed', None)
-        self.toolhead_info = self.toolhead.get_status(now)
-        logging.info(str(self.toolhead_info))
+        gcode_status = self.gcode.get_status(now)
         response = {}
-        response['status'] = "P" if self.toolhead_info['status'] == "Printing" else "I"
+        response['status'] = self.get_printer_status(now, gcode_status)
         response['myName'] = "Klipper"
         response['firmwareName'] = "Klipper for Duet 2 WiFi/Ethernet"
         response['numTools'] = len(extruders)
+        response['babystep'] = gcode_status['homing_zpos']
+        response['pos'] = []
+        response['pos'].append(round(gcode_status['last_xpos']))
+        response['pos'].append(round(gcode_status['last_ypos']))
+        response['pos'].append(round(gcode_status['last_zpos']))
 
         if bed is not None:
             status = bed.get_status(now)
@@ -285,9 +337,6 @@ class PanelDue:
             self.fd_handle = self.reactor.register_fd(self.fd, self.process_pd_data)
 
             self.gcode.register_respond_callback(self.gcode_respond_callback)
-
-            # Intialize the PanelDue to wake it up for the first time
-            self.queue_gcode("M408")
 
 def load_config(config):
     return PanelDue(config)
