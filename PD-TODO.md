@@ -16,9 +16,9 @@ TODO
 
 8. [X] 8. Set standby bed temperature
 
-9. [ ] 9. Set active tool temperature (G10 P# S###)
+9. [X] 9. Set active tool temperature (G10 P# S###)
 
-10. [ ] 10. Set standby tool temperature (G10 P# R###)
+10. [X] 10. Set standby tool temperature (G10 P# R###)
 
 11. [X] 11. Log messages to console
 
@@ -40,10 +40,26 @@ TODO
 
 20. [X] 20. Cancel print
 
-21. [ ] 21. Extrusion settings (untested)
+21. [X] 21. Extrusion settings (now tested!)
 
 22. [ ] 22. Extra Documentation. Make sure to mention 3.3V voltage Levels
 
 23. [ ] 23. Create a document that shows how to connect a PanelDue to the rpi onboard UART
 
 24. [X] 24. Have M408 detect "Paused" state so that PD can resume (note: Klipper is in "Ready" state)
+
+25. [ ] 25. Show homing states
+
+26. [ ] 26. Show fan speeds during print (is this part of M408 type 1?)
+
+27. [ ] 27. Have SD card listing only show .gcode files (add filter)
+
+28. [ ] 28. SD card - add ability to navigate into sub-folders. Note: May also affect "start print" command (M32)
+
+29. [ ] 28. Figure why bed standby temp doesn't update on PD (wrong mapping?)
+
+
+Nice to Haves
+====
+
+1. [ ] 1. Octoprint print manager then allow user to decide between Virtual SD and Octoprint.
