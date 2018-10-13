@@ -34,30 +34,36 @@ Now reboot
    https://docs.microsoft.com/en-us/windows/iot-core/media/pinmappingsrpi/rp2_pinout.png
    
    You are interested in pins:
-   - 4 -> 5V
-   - 6 -> GND
-   - 8 -> TX
-   - 10 -> RX
+   
+| Pin # | Purpose |
+|-------|---------|
+| 4     | 5V      |
+|  6    | GND     |
+| 8     | TX      |
+| 10    | RX      |
    
    !!!! IMPORTANT: Do not connect your PanelDue's communication pins to anything over than 3.3V
    or you can cause permanent damage. !!!!!!
    
    A genuine PanelDue uses the follow wire color coding:
    
-   - Red -> 5V
-   - Black -> GND
-   - Blue -> TX
-   - Green -> RX
+| Color  | Pin |
+|--------|-----|
+| Red    | 5V  |
+|  Black | GND |
+| Blue   | TX  |
+| Green  | RX  |
    
    However, please verify these are correct for your device. Clones will not be the same.
    
    Now make the following connections:
-   Pi		PD
-	==		==
-	5V		5V
-	GND	GND
-	TX		RX
-	RX		TX
+   
+| Pi  | PD  |
+|-----|-----|
+| 5V  | 5V  |
+| GND | GND |
+| RX  | TX  |
+| TX  | RX  |
 	
 	Note that the RX goes to TX and vice versa.
 	Also note that the PanelDue may require a bit of current from your Pi.
