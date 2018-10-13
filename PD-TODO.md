@@ -48,15 +48,17 @@ TODO
 
 24. [X] 24. Have M408 detect "Paused" state so that PD can resume (note: Klipper is in "Ready" state)
 
-25. [ ] 25. Show homing states
+25. [X] 25. Show homing states
 
 26. [ ] 26. Show fan speeds during print (is this part of M408 type 1?)
 
-27. [ ] 27. Have SD card listing only show .gcode files (add filter)
+27. [X] 27. Have SD card listing only show .gcode files (add filter)
 
-28. [ ] 28. SD card - add ability to navigate into sub-folders. Note: May also affect "start print" command (M32)
+28. [X] 28. SD card - view and navigate into sub-directories
 
-29. [ ] 28. Figure why bed standby temp doesn't update on PD (wrong mapping?)
+29. [ ] 29. SD card - Ability to print from sub-directory (not currently supported by virtual SD card extra)
+
+30. [ ] 30. Figure why bed standby temp doesn't update on PD (wrong mapping?)
 
 
 Nice to Haves
