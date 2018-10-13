@@ -42,7 +42,7 @@ Now reboot
 | 8     | TX      |
 | 10    | RX      |
    
-   !!!! IMPORTANT: Do not connect your PanelDue's communication pins to anything over than 3.3V
+   !!!! IMPORTANT: Do not connect your PanelDue's communication pins to anything other than 3.3V
    or you can cause permanent damage. !!!!!!
    
    A genuine PanelDue uses the follow wire color coding:
