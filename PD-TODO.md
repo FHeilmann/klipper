@@ -57,3 +57,9 @@ TODO
 28. [ ] 28. SD card - add ability to navigate into sub-folders. Note: May also affect "start print" command (M32)
 
 29. [ ] 28. Figure why bed standby temp doesn't update on PD (wrong mapping?)
+
+
+Nice to Haves
+====
+
+1. [ ] 1. Octoprint print manager then allow user to decide between Virtual SD and Octoprint.
