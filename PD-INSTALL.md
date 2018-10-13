@@ -74,15 +74,22 @@ Now reboot
 
    At this point your PanelDue screen should be on but stuck in the "Connecting..." status
    You can use "tio" to test the connection.
+   
    > sudo apt-get install tio
+   
    follow the prompts and enter Y to install
+   
    Your serial port path should be /dev/ttyS0 and the default baudrate is 57600.
    Run the following:
+   
    > sudo tio --baudrate 57600 --databits 8 --flow none --stopbits 1 --parity none /dev/ttyS0
-  	Now test that you can receive by looking for M408 commands. You should see a new message 
-    pop up every 5 seconds or so.
+   
+  	Now test that you can receive by looking for M408 commands. 
+	You should see a new message pop up every 5 seconds or so.
 	You can test sending to the PD by copy and pasting the following command:
-	{"status": "I", "myName":"Connection Test", "message":"Test Successful!" }
+	
+    > {"status": "I", "myName":"Connection Test", "message":"Test Successful!" }
+    
 	Paste this into the console and hit enter. You will not get any feedback from tio,
 	but if successful your PD should now be in the Idle state and should display
 	a "Test Successful!" message box.
