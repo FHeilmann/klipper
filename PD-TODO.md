@@ -44,7 +44,7 @@ TODO
 
 22. [ ] 22. Extra Documentation. Make sure to mention 3.3V voltage Levels
 
-23. [ ] 23. Create a document that shows how to connect a PanelDue to the rpi onboard UART
+23. [X] 23. Create a document that shows how to connect a PanelDue to the rpi onboard UART
 
 24. [X] 24. Have M408 detect "Paused" state so that PD can resume (note: Klipper is in "Ready" state)
 
