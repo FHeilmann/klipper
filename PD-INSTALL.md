@@ -30,19 +30,25 @@ Now reboot
 2. Connect your PanelDue to your Pi.
 
    Use the following image as a reference (the pins for rpi2 and 2pi3 are the same):
+   
    https://docs.microsoft.com/en-us/windows/iot-core/media/pinmappingsrpi/rp2_pinout.png
+   
    You are interested in pins:
    - 4 -> 5V
    - 6 -> GND
    - 8 -> TX
    - 10 -> RX
+   
    !!!! IMPORTANT: Do not connect your PanelDue's communication pins to anything over than 3.3V
    or you can cause permanent damage. !!!!!!
+   
    A genuine PanelDue uses the follow wire color coding:
+   
    - Red -> 5V
    - Black -> GND
    - Blue -> TX
    - Green -> RX
+   
    However, please verify these are correct for your device. Clones will not be the same.
    
    Now make the following connections:
