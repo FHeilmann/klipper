@@ -99,10 +99,10 @@ Now reboot
 	
 4. Configure klipper
 
-   It is highly recommend that in addition to configure the paneldue extra you also configure the
-   virtual SD extra. This allows for printing from file.
+   It is highly recommend that in addition to configuring the paneldue extra you also configure the
+   "virtual SD card" extra. This allows for printing from file.
    
-   A sample config looks like the following:
+   A sample config with both might look like the following:
  
 ~~~~
 [virtual_sdcard]
