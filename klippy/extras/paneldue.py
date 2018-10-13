@@ -264,7 +264,6 @@ class PanelDue:
             index = param.find("P")
             if (index == 0):
                 path = param[1:]
-            logging.info("M20 for path" + path)
 
         response['dir'] = path
         response['files'] = []
@@ -273,16 +272,33 @@ class PanelDue:
             for cmd in self.macro_list:
                 if cmd:
                     response['files'].append(cmd)
-        else:
+        elif path.find("0:/gcodes") == 0:
+            request_dir = path[9:]
             sdcard = self.printer.objects.get('virtual_sdcard')
             if sdcard is not None:
+                original_dir = sdcard.sdcard_dirname
+                sdcard.sdcard_dirname = sdcard.sdcard_dirname + request_dir
                 files = sdcard.get_file_list()
                 for fname, fsize in files:
-                    response['files'].append(str(fname))
-
+                    prefix = ("*" if os.path.isdir(os.path.join(sdcard.sdcard_dirname, fname)) else "")
+                    if (prefix or fname.endswith('.gcode')):
+                        response['files'].append(prefix + str(fname))  
+                sdcard.sdcard_dirname = original_dir                
         json_response = json.dumps(response)
         logging.info(json_response)
         self.gcode.respond(json_response)
+
+    def get_axes_homed(self, toolhead):
+        kin = toolhead.get_kinematics()
+        if not kin.limits:
+            return [0.,0.,0.]
+        homed = []
+        for axis in 'XYZ':
+            index = self.gcode.axis2pos[axis]
+            #logging.info("limit " + str(index) + " is " + str(kin.limits[index][0]) + ". limitb is " + str(kin.limits[index][1]))
+            logging.info("limit " + str(index) + " is " + str(self.gcode.homing_position[index]))
+            homed.append(0 if kin.limits[index][0] > kin.limits[index][1] else 1)
+        return homed
 
     def get_printer_status(self, now, gcode_status):
 
@@ -322,6 +338,7 @@ class PanelDue:
         response['pos'].append(round(gcode_status['last_xpos']))
         response['pos'].append(round(gcode_status['last_ypos']))
         response['pos'].append(round(gcode_status['last_zpos']))
+        response['homed'] = self.get_axes_homed(self.toolhead)
 
         if bed is not None:
             status = bed.get_status(now)
