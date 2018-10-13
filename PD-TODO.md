@@ -16,9 +16,9 @@ TODO
 
 8. [X] 8. Set standby bed temperature
 
-9. [ ] 9. Set active tool temperature (G10 P# S###)
+9. [X] 9. Set active tool temperature (G10 P# S###)
 
-10. [ ] 10. Set standby tool temperature (G10 P# R###)
+10. [X] 10. Set standby tool temperature (G10 P# R###)
 
 11. [X] 11. Log messages to console
 
@@ -40,10 +40,12 @@ TODO
 
 20. [X] 20. Cancel print
 
-21. [ ] 21. Extrusion settings (untested)
+21. [X] 21. Extrusion settings (now tested!)
 
 22. [ ] 22. Extra Documentation. Make sure to mention 3.3V voltage Levels
 
 23. [ ] 23. Create a document that shows how to connect a PanelDue to the rpi onboard UART
 
 24. [X] 24. Have M408 detect "Paused" state so that PD can resume (note: Klipper is in "Ready" state)
+
+25. [ ] 25. Homing states
