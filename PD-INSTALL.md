@@ -103,16 +103,18 @@ Now reboot
    virtual SD extra. This allows for printing from file.
    
    A sample config looks like the following:
-   
-> [virtual_sdcard]
-> path: ~/.octoprint/uploads
-> 
-> [paneldue]
-> serial_port: /dev/ttyS0
-> serial_baudrate: 57600
-> macro_list:
->         NOZZLE_CLEAN
->         QUAD_GANTRY_LEVEL
+ 
+~~~~
+  [virtual_sdcard]
+  path: ~/.octoprint/uploads
+  
+  [paneldue]
+  serial_port: /dev/ttyS0
+  serial_baudrate: 57600
+  macro_list:
+          NOZZLE_CLEAN
+          QUAD_GANTRY_LEVEL
+~~~~
 
    Using your octoprint upload folder means that you can manage these files through octoprint
    (upload, delete, etc). It's not necessary but may be helpful.
