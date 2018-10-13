@@ -29,7 +29,7 @@ Now reboot
 
 2. Connect your PanelDue to your Pi.
 
-   Use the following image as a reference (the pins for rpi2 and 2pi3 are the same):
+   Use the following image as a reference (the pins for rpi2 and pi3 are the same):
    
    https://docs.microsoft.com/en-us/windows/iot-core/media/pinmappingsrpi/rp2_pinout.png
    
