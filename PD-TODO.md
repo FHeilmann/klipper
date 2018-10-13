@@ -48,4 +48,6 @@ TODO
 
 24. [X] 24. Have M408 detect "Paused" state so that PD can resume (note: Klipper is in "Ready" state)
 
-25. [ ] 25. Homing states
+25. [ ] 25. Show homing states
+
+26. [ ] 26. Show fan speeds during print (is this part of M408 type 1?)
