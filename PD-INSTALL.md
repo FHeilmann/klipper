@@ -65,10 +65,10 @@ Now reboot
 | RX  | TX  |
 | TX  | RX  |
 	
-	Note that the RX goes to TX and vice versa.
-	Also note that the PanelDue may require a bit of current from your Pi.
-	You canmay consider using a different 5V source for your PD if you have any concerns around 
-	overloading your Pi's power supply.
+   Note that the RX goes to TX and vice versa.
+   Also note that the PanelDue may require a bit of current from your Pi.
+   You may consider using a different 5V source for your PD if you have any concerns around 
+   overloading your Pi's power supply.
 	
 3. Test your serial connection. (Optional step)
 
