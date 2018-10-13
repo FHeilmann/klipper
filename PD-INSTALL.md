@@ -84,8 +84,10 @@ Now reboot
    
    > sudo tio --baudrate 57600 --databits 8 --flow none --stopbits 1 --parity none /dev/ttyS0
    
-  	Now test that you can receive by looking for M408 commands. 
+  	Now test that you can receive by looking for M408 commands.
+	Example: "N5496 M408 S0 R0*16"
 	You should see a new message pop up every 5 seconds or so.
+	
 	You can test sending to the PD by copy and pasting the following command:
 	
     > {"status": "I", "myName":"Connection Test", "message":"Test Successful!" }
@@ -93,6 +95,7 @@ Now reboot
 	Paste this into the console and hit enter. You will not get any feedback from tio,
 	but if successful your PD should now be in the Idle state and should display
 	a "Test Successful!" message box.
+	Hit CTL-T then Q to exit tio.
 	
 4. Configure klipper
 
@@ -101,15 +104,15 @@ Now reboot
    
    A sample config looks like the following:
    
-[virtual_sdcard]
-path: ~/.octoprint/uploads
-
-[paneldue]
-serial_port: /dev/ttyS0
-serial_baudrate: 57600
-macro_list:
-        NOZZLE_CLEAN
-        QUAD_GANTRY_LEVEL
+> [virtual_sdcard]
+> path: ~/.octoprint/uploads
+> 
+> [paneldue]
+> serial_port: /dev/ttyS0
+> serial_baudrate: 57600
+> macro_list:
+>         NOZZLE_CLEAN
+>         QUAD_GANTRY_LEVEL
 
    Using your octoprint upload folder means that you can manage these files through octoprint
    (upload, delete, etc). It's not necessary but may be helpful.
