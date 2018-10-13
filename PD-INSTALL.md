@@ -72,8 +72,8 @@ Now reboot
 	
 3. Test your serial connection. (Optional step)
 
-   At this point your PanelDue screen should be on but stuck in the "Connecting..." status
-   You can use "tio" to test the connection.
+   At this point your PanelDue screen should be on but stuck in the "Connecting..." status.
+   You can use "tio" on the Pi to test the communication between the Pi and PanelDue.
    
    > sudo apt-get install tio
    
