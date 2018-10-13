@@ -60,7 +60,7 @@ TODO
 
 30. [ ] 30. Figure why bed standby temp doesn't update on PD (wrong mapping?)
 
-31. [ ] 31. Turn off all heaters after cancelled print does not work, but should after we merge into the lastest klipper changes.
+31. [ ] 31. TURN_OFF_HEATERS call after cancelled print does not work, but should after we merge into the lastest klipper changes.
 
 
 Nice to Haves
