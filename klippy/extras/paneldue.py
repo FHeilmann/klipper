@@ -120,8 +120,11 @@ class PanelDue:
             "M25": self.cmd_M25,
             "M32": self.cmd_M32,
             "M98": self.cmd_M98,
+            "M106": self.cmd_M106,
+            "M112": self.cmd_M112,
             "M290": self.cmd_M290,
-            "M408": self.cmd_M408
+            "M408": self.cmd_M408,
+            "G10": self.cmd_G10
         }     
 
         func = switcher.get(params['#command'], lambda x : self.queue_gcode(x["#original"]))
@@ -172,6 +175,7 @@ class PanelDue:
     def build_config(self):
         pass
 
+    # Start SD print
     def cmd_M32(self, params):
 
         path = params['#original'].replace("M32 ", "")
@@ -192,6 +196,17 @@ class PanelDue:
         # Turn off all heaters
         self.queue_gcode("TURN_OFF_HEATERS")
 
+
+    # Set fan speeds. Bypass gcode queue
+    def cmd_M106(self, params):
+        self.gcode.cmd_M106(params)   
+
+
+    # Emergency stop. A M112 gets klipper into a funky state, a firmware restart
+    # seems to be a nicer way to clear everything snd start over
+    def cmd_M112(self, params):
+        self.gcode.cmd_FIRMWARE_RESTART(params)
+
     # Baby stepping
     # PD issues a "M290 S#" which supplies relative steps
     # Klipper's equivalent is "SET_GCODE_OFFSET Z#"" but takes absolute steps
@@ -207,12 +222,23 @@ class PanelDue:
 
         self.gcode.cmd_SET_GCODE_OFFSET(params)     
 
+    # Pause SD print
     def cmd_M25(self, params):
 
         sdcard = self.printer.objects.get('virtual_sdcard')
         if sdcard is not None:
             sdcard.cmd_M25(params)
 
+    # G10 in RRF is used to set standby/active temp. We will map it to 
+    # simply set the target temp (M104)
+    def cmd_G10(self, params):
+
+        tool = self.gcode.get_int('P', params, 0)
+        temp = max(self.gcode.get_float('S', params, 0.), self.gcode.get_float('R', params, 0.))
+        params = self.parse_params("M104 T%d S%0.2f" % (tool,temp))
+        self.gcode.cmd_M104(params)
+
+    # Execute file, used for macro execution
     def cmd_M98(self, params):
 
         path = ""
@@ -228,6 +254,7 @@ class PanelDue:
             logging.info("Executing macro " + macro)
             self.queue_gcode(macro)
 
+    # List SD card files 
     def cmd_M20(self, params):
 
         response = {}
@@ -273,8 +300,11 @@ class PanelDue:
             return "B"
 
         toolhead_info = self.toolhead.get_status(now)
+
+        # Seems to be problematic, just return I if we got this far
         # P = printing, I = idle
-        return "P" if toolhead_info['status'] == "Printing" else "I"
+        #return "P" if toolhead_info['status'] == "Printing" else "I"
+        return "I"
 
     def cmd_M408(self, params):
         self.toolhead = self.printer.lookup_object("toolhead")
