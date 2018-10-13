@@ -56,9 +56,11 @@ TODO
 
 28. [X] 28. SD card - view and navigate into sub-directories
 
-29. [ ] 29. SD card - Ability to print from sub-directory (not currently supported by virtual SD card extra)
+29. [X] 29. SD card - Ability to print from sub-directory
 
 30. [ ] 30. Figure why bed standby temp doesn't update on PD (wrong mapping?)
+
+31. [ ] 31. TURN_OFF_HEATERS call after cancelled print does not work, but should after we merge into the lastest klipper changes.
 
 
 Nice to Haves
