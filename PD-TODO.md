@@ -51,3 +51,5 @@ TODO
 25. [ ] 25. Show homing states
 
 26. [ ] 26. Show fan speeds during print (is this part of M408 type 1?)
+
+27. [ ] 27. Have SD card listing only show .gcode files (add filter)
