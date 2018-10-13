@@ -98,7 +98,7 @@ class PanelDue:
         for line in readlines[:-1]:
             line = line.strip()
 
-            logging.info("raw message " + line)
+            logging.debug("raw message " + line)
 
             message = self.parse_pd_message(line)
 
@@ -180,18 +180,24 @@ class PanelDue:
 
         path = params['#original'].replace("M32 ", "")
 
-        self.queue_gcode("M23 " + path)
-        self.queue_gcode("M24")
-        logging.info("Starting SD Print: " + path)
+        # Remove the directory since it should already be the active directory
+        last_slash = path.rfind("/")
+        if last_slash >= 0:
+                path = path[last_slash+1:]
+
+
+        self.sdcard.cmd_M23(self.parse_params("M23 " + path))
+        self.sdcard.cmd_M24(self.parse_params("M24"))
+
+        logging.info("Starting SD Print: " + path + " from directory " + self.sdcard.sdcard_dirname)
 
     # Cancel Print
     def cmd_M0(self, params):
-        sdcard = self.printer.objects.get('virtual_sdcard')
-        if sdcard is not None:
-            sdcard.work_timer = None
-            sdcard.must_pause_work = False
-            sdcard.current_file = None
-            sdcard.file_position = sdcard.file_size = 0
+        if self.sdcard is not None:
+            self.sdcard.work_timer = None
+            self.sdcard.must_pause_work = False
+            self.sdcard.current_file = None
+            self.sdcard.file_position = self.sdcard.file_size = 0
 
         # Turn off all heaters
         self.queue_gcode("TURN_OFF_HEATERS")
@@ -225,9 +231,8 @@ class PanelDue:
     # Pause SD print
     def cmd_M25(self, params):
 
-        sdcard = self.printer.objects.get('virtual_sdcard')
-        if sdcard is not None:
-            sdcard.cmd_M25(params)
+        if self.sdcard is not None:
+            self.sdcard.cmd_M25(params)
 
     # G10 in RRF is used to set standby/active temp. We will map it to 
     # simply set the target temp (M104)
@@ -274,18 +279,14 @@ class PanelDue:
                     response['files'].append(cmd)
         elif path.find("0:/gcodes") == 0:
             request_dir = path[9:]
-            sdcard = self.printer.objects.get('virtual_sdcard')
-            if sdcard is not None:
-                original_dir = sdcard.sdcard_dirname
-                sdcard.sdcard_dirname = sdcard.sdcard_dirname + request_dir
-                files = sdcard.get_file_list()
+            if self.sdcard is not None:
+                self.sdcard.sdcard_dirname = self.sd_base_dir + request_dir
+                files = self.sdcard.get_file_list()
                 for fname, fsize in files:
-                    prefix = ("*" if os.path.isdir(os.path.join(sdcard.sdcard_dirname, fname)) else "")
+                    prefix = ("*" if os.path.isdir(os.path.join(self.sdcard.sdcard_dirname, fname)) else "")
                     if (prefix or fname.endswith('.gcode')):
                         response['files'].append(prefix + str(fname))  
-                sdcard.sdcard_dirname = original_dir                
         json_response = json.dumps(response)
-        logging.info(json_response)
         self.gcode.respond(json_response)
 
     def get_axes_homed(self, toolhead):
@@ -295,19 +296,16 @@ class PanelDue:
         homed = []
         for axis in 'XYZ':
             index = self.gcode.axis2pos[axis]
-            #logging.info("limit " + str(index) + " is " + str(kin.limits[index][0]) + ". limitb is " + str(kin.limits[index][1]))
-            logging.info("limit " + str(index) + " is " + str(self.gcode.homing_position[index]))
             homed.append(0 if kin.limits[index][0] > kin.limits[index][1] else 1)
         return homed
 
     def get_printer_status(self, now, gcode_status):
 
-        sdcard = self.printer.objects.get('virtual_sdcard')
-        if sdcard is not None:
-            if sdcard.must_pause_work:
+        if self.sdcard is not None:
+            if self.sdcard.must_pause_work:
                 # D = pausing, A = paused
-                return "D" if sdcard.work_timer is not None else "A"
-            if sdcard.current_file is not None and sdcard.work_timer is not None:
+                return "D" if self.sdcard.work_timer is not None else "A"
+            if self.sdcard.current_file is not None and self.sdcard.work_timer is not None:
                 # Printing
                 return "P"
 
@@ -360,7 +358,6 @@ class PanelDue:
         logging.info(json_response)
         if 'VARIANT' in params:
             variant = self.gcode.get_int('VARIANT', params, minval=0, maxval=3)
-        logging.info('BUILD_RESPONSE executed with variant {}'.format(variant))
         self.gcode.respond(json_response)
 
     def printer_state(self, state):
@@ -368,6 +365,10 @@ class PanelDue:
         logging.info("checking printer state")
 
         if state == 'ready':
+
+            self.sdcard = self.printer.objects.get('virtual_sdcard')
+            if self.sdcard is not None: 
+                self.sd_base_dir = self.sdcard.sdcard_dirname
 
             logging.info("PanelDue initializing serial port " + self.serial_port + " at baudrate " + self.serial_baudrate)
 
