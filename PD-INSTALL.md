@@ -6,24 +6,29 @@ While it is possible to use a USB to serial adapter, this guide will assume you
 are attaching your PanelDue directly to your Raspberry Pi's onboard UART
 
 1. To enable the UART via your Pi's GPIO pins follow the guide here: 
+
 https://spellfoundry.com/2016/05/29/configuring-gpio-serial-port-raspbian-jessie-including-pi-3/
 
 While the guide goes more in depth, the summary is:
 > sudo nano /boot/config.txt
+
 and add the line (at the bottom):
 enable_uart=1
 
-Then disble any conflicting services:
+Then disable any conflicting services:
 > sudo systemctl disable serial-getty@ttyAMA0.service
+
 > sudo systemctl disable serial-getty@ttyS0.service
 
 > sudo nano /boot/cmdline.txt
+
 remove the portion: console=serial0,115200 and save.
 
 Now reboot
 > sudo reboot
 
 2. Connect your PanelDue to your Pi.
+
    Use the following image as a reference (the pins for rpi2 and 2pi3 are the same):
    https://docs.microsoft.com/en-us/windows/iot-core/media/pinmappingsrpi/rp2_pinout.png
    You are interested in pins:
@@ -53,7 +58,8 @@ Now reboot
 	You canmay consider using a different 5V source for your PD if you have any concerns around 
 	overloading your Pi's power supply.
 	
-3. Test your serial connection.
+3. Test your serial connection. (Optional step)
+
    At this point your PanelDue screen should be on but stuck in the "Connecting..." status
    You can use "tio" to test the connection.
    > sudo apt-get install tio
@@ -70,6 +76,7 @@ Now reboot
 	a "Test Successful!" message box.
 	
 4. Configure klipper
+
    It is highly recommend that in addition to configure the paneldue extra you also configure the
    virtual SD extra. This allows for printing from file.
    
