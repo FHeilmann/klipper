@@ -114,20 +114,25 @@ class PanelDue:
 
         params = self.parse_params(command)
 
+        # Some commands such as RRF's M36 don't parse well.
+        cmd = params['#command'].split(" ")[0]
+
         switcher = {
             "M0": self.cmd_M0,
             "M20": self.cmd_M20,
             "M25": self.cmd_M25,
             "M32": self.cmd_M32,
+            "M36": self.cmd_M36,
             "M98": self.cmd_M98,
             "M106": self.cmd_M106,
             "M112": self.cmd_M112,
+            "M220": self.cmd_M220,
             "M290": self.cmd_M290,
             "M408": self.cmd_M408,
             "G10": self.cmd_G10
         }     
 
-        func = switcher.get(params['#command'], lambda x : self.queue_gcode(x["#original"]))
+        func = switcher.get(cmd, lambda x : self.queue_gcode(x["#original"]))
         func(params)
 
     def queue_gcode(self, script):
@@ -203,10 +208,13 @@ class PanelDue:
         self.queue_gcode("TURN_OFF_HEATERS")
 
 
-    # Set fan speeds. Bypass gcode queue
+    # Set fan speed. Bypass gcode queue
     def cmd_M106(self, params):
-        self.gcode.cmd_M106(params)   
+        self.gcode.cmd_M106(params)  
 
+    # Set print speed. Bypass gcode queue
+    def cmd_M220(self, params):
+        self.gcode.cmd_M220(params)
 
     # Emergency stop. A M112 gets klipper into a funky state, a firmware restart
     # seems to be a nicer way to clear everything snd start over
@@ -289,6 +297,24 @@ class PanelDue:
         json_response = json.dumps(response)
         self.gcode.respond(json_response)
 
+    # FileInfo. Lots of work to do here
+    def cmd_M36(self, params):
+
+        #example: M36 0:/gcodes/myprint.gcode
+
+        response = {}
+        response['err'] = 0
+        response['size'] = 500
+        response['lastModified'] = ''
+        response['height'] = 100
+        response['firstLayerHeight'] = 0
+        response['layerHeight'] = 0
+        response['filament'] = 0
+        response['filament'] = []
+        response['generatedBy'] = 'Unknown Slicer'
+
+        self.gcode.respond(json.dumps(response))
+
     def get_axes_homed(self, toolhead):
         kin = toolhead.get_kinematics()
         if not kin.limits:
@@ -337,6 +363,12 @@ class PanelDue:
         response['pos'].append(round(gcode_status['last_ypos']))
         response['pos'].append(round(gcode_status['last_zpos']))
         response['homed'] = self.get_axes_homed(self.toolhead)
+        response['fanPercent'] = []
+        response['sfactor'] = round(gcode_status['speed_factor']*100.,1)
+
+        if self.fan is not None:
+            fanPercent = self.fan.get_status(now)['speed']*100.
+            response['fanPercent'].append(round(fanPercent,1))
 
         if bed is not None:
             status = bed.get_status(now)
@@ -366,6 +398,7 @@ class PanelDue:
 
         if state == 'ready':
 
+            self.fan = self.printer.lookup_object('fan', None)
             self.sdcard = self.printer.objects.get('virtual_sdcard')
             if self.sdcard is not None: 
                 self.sd_base_dir = self.sdcard.sdcard_dirname
