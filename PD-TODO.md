@@ -32,7 +32,7 @@ TODO
 
 16. [X] 16. start print from SD card
 
-17. [ ] 17. show file stats (size, sliced by, etc)
+17. [ ] 17. show file stats (size, sliced by, etc) - Stubbed out but needs real info.
 
 18. [X] 18. Pause print
 
@@ -50,7 +50,7 @@ TODO
 
 25. [X] 25. Show homing states
 
-26. [ ] 26. Show fan speeds during print (is this part of M408 type 1?)
+26. [X] 26. Show fan speeds during print
 
 27. [X] 27. Have SD card listing only show .gcode files (add filter)
 
@@ -62,6 +62,9 @@ TODO
 
 31. [ ] 31. TURN_OFF_HEATERS call after cancelled print does not work, but should after we merge into the lastest klipper changes.
 
+32. [X] 32. Set fan speeds
+
+33. [X] 33. Set/display print speeds
 
 Nice to Haves
 ====
