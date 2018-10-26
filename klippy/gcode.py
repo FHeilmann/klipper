@@ -53,6 +53,7 @@ class GCodeParser:
         self.need_ack = False
         self.toolhead = self.fan = self.extruder = None
         self.heaters = []
+        self.heater_chamber = None
         self.speed = 25.0
         self.axis2pos = {'X': 0, 'Y': 1, 'Z': 2, 'E': 3}
     def register_command(self, cmd, func, when_not_ready=False, desc=None):
@@ -140,6 +141,7 @@ class GCodeParser:
             self.toolhead.set_extruder(self.extruder)
         self.heaters = [ e.get_heater() for e in extruders ]
         self.heaters.append(self.printer.lookup_object('heater_bed', None))
+        self.heater_chamber = self.printer.lookup_object('heater_chamber', None)
         self.fan = self.printer.lookup_object('fan', None)
         if self.is_fileinput and self.fd_handle is None:
             self.fd_handle = self.reactor.register_fd(self.fd, self.process_data)
@@ -382,11 +384,13 @@ class GCodeParser:
             print_time = self.toolhead.get_last_move_time()
             self.respond(self.get_temp(eventtime))
             eventtime = self.reactor.pause(eventtime + 1.)
-    def set_temp(self, params, is_bed=False, wait=False):
+    def set_temp(self, params, is_bed=False, wait=False, is_chamber=False):
         temp = self.get_float('S', params, 0.)
         heater = None
         if is_bed:
             heater = self.heaters[-1]
+        elif is_chamber:
+            heater = self.heater_chamber
         elif 'T' in params:
             index = self.get_int(
                 'T', params, minval=0, maxval=len(self.heaters)-2)
@@ -461,7 +465,7 @@ class GCodeParser:
         'G1', 'G4', 'G28', 'M18', 'M400',
         'G20', 'M82', 'M83', 'G90', 'G91', 'G92', 'M114', 'M220', 'M221',
         'SET_GCODE_OFFSET', 'M206',
-        'M105', 'M104', 'M109', 'M140', 'M190', 'M106', 'M107',
+        'M105', 'M104', 'M109', 'M140', 'M141', 'M190', 'M106', 'M107',
         'M112', 'M115', 'IGNORE', 'GET_POSITION',
         'RESTART', 'FIRMWARE_RESTART', 'ECHO', 'STATUS', 'HELP']
     # G-Code movement commands
@@ -608,6 +612,9 @@ class GCodeParser:
     def cmd_M140(self, params):
         # Set Bed Temperature
         self.set_temp(params, is_bed=True)
+    def cmd_M141(self, params):
+        # Set Chamber Temperature
+        self.set_temp(params, is_bed=False, wait=False, is_chamber=True)
     def cmd_M190(self, params):
         # Set Bed Temperature and Wait
         self.set_temp(params, is_bed=True, wait=True)
@@ -672,6 +679,8 @@ class GCodeParser:
             for heater in self.heaters:
                 if heater is not None:
                     heater.set_temp(print_time, 0.)
+            if self.heater_chamber is not None:
+                self.heater_chamber.set_temp(print_time, 0.)
             if self.fan is not None:
                 self.fan.set_speed(print_time, 0.)
             self.toolhead.dwell(0.500)
