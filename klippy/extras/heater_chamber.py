@@ -1,6 +1,6 @@
-# Support for a heated bed
+# Support for a heated chamber
 #
-# Copyright (C) 2018  Kevin O'Connor <kevin@koconnor.net>
+# Copyright (C) 2018  John Jardine <john@gprime.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
