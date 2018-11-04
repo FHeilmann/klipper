@@ -53,7 +53,6 @@ class GCodeParser:
         self.need_ack = False
         self.toolhead = self.fan = self.extruder = None
         self.heaters = []
-        self.heater_chamber = None
         self.speed = 25.0
         self.axis2pos = {'X': 0, 'Y': 1, 'Z': 2, 'E': 3}
     def register_command(self, cmd, func, when_not_ready=False, desc=None):
@@ -140,8 +139,8 @@ class GCodeParser:
             self.extruder = extruders[0]
             self.toolhead.set_extruder(self.extruder)
         self.heaters = [ e.get_heater() for e in extruders ]
+        self.heaters.append(self.printer.lookup_object('heater_chamber', None))
         self.heaters.append(self.printer.lookup_object('heater_bed', None))
-        self.heater_chamber = self.printer.lookup_object('heater_chamber', None)
         self.fan = self.printer.lookup_object('fan', None)
         if self.is_fileinput and self.fd_handle is None:
             self.fd_handle = self.reactor.register_fd(self.fd, self.process_data)
@@ -390,7 +389,7 @@ class GCodeParser:
         if is_bed:
             heater = self.heaters[-1]
         elif is_chamber:
-            heater = self.heater_chamber
+            heater = self.heaters[-2]
         elif 'T' in params:
             index = self.get_int(
                 'T', params, minval=0, maxval=len(self.heaters)-2)
@@ -679,8 +678,6 @@ class GCodeParser:
             for heater in self.heaters:
                 if heater is not None:
                     heater.set_temp(print_time, 0.)
-            if self.heater_chamber is not None:
-                self.heater_chamber.set_temp(print_time, 0.)
             if self.fan is not None:
                 self.fan.set_speed(print_time, 0.)
             self.toolhead.dwell(0.500)
