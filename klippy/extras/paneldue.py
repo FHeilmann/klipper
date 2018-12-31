@@ -354,9 +354,6 @@ class PanelDue:
         gcode_status = self.gcode.get_status(now)
         response = {}
         response['status'] = self.get_printer_status(now, gcode_status)
-        response['myName'] = "Klipper"
-        response['firmwareName'] = "Klipper for Duet 2 WiFi/Ethernet"
-        response['numTools'] = len(extruders)
         response['babystep'] = gcode_status['homing_zpos']
         response['pos'] = []
         response['pos'].append(round(gcode_status['last_xpos']))
@@ -365,6 +362,11 @@ class PanelDue:
         response['homed'] = self.get_axes_homed(self.toolhead)
         response['fanPercent'] = []
         response['sfactor'] = round(gcode_status['speed_factor']*100.,1)
+        response_type = params.get("S", None)
+        if(response_type == "1"):
+            response['myName'] = "Klipper"
+            response['firmwareName'] = "Klipper for Duet 2 WiFi/Ethernet"
+            response['numTools'] = len(extruders)
 
         if self.fan is not None:
             fanPercent = self.fan.get_status(now)['speed']*100.
