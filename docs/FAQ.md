@@ -12,10 +12,13 @@ Frequently asked questions
 9. [Why is the Z position_endstop set to 0.5 in the default configs?](#why-is-the-z-position_endstop-set-to-05-in-the-default-configs)
 10. [I converted my config from Marlin and the X/Y axes work fine, but I just get a screeching noise when homing the Z axis](#i-converted-my-config-from-marlin-and-the-xy-axes-work-fine-but-i-just-get-a-screeching-noise-when-homing-the-z-axis)
 11. [My TMC motor driver turns off in the middle of a print](#my-tmc-motor-driver-turns-off-in-the-middle-of-a-print)
-12. [When I set "restart_method=command" my AVR device just hangs on a restart](#when-i-set-restart_methodcommand-my-avr-device-just-hangs-on-a-restart)
-13. [Will the heaters be left on if the Raspberry Pi crashes?](#will-the-heaters-be-left-on-if-the-raspberry-pi-crashes)
-14. [How do I convert a Marlin pin number to a Klipper pin name?](#how-do-i-convert-a-marlin-pin-number-to-a-klipper-pin-name)
-15. [How do I upgrade to the latest software?](#how-do-i-upgrade-to-the-latest-software)
+12. [I keep getting random "Lost communication with MCU" errors](#i-keep-getting-random-lost-communication-with-mcu-errors)
+13. [My Raspberry Pi keeps rebooting during prints](#my-raspberry-pi-keeps-rebooting-during-prints)
+14. [When I set "restart_method=command" my AVR device just hangs on a restart](#when-i-set-restart_methodcommand-my-avr-device-just-hangs-on-a-restart)
+15. [Will the heaters be left on if the Raspberry Pi crashes?](#will-the-heaters-be-left-on-if-the-raspberry-pi-crashes)
+16. [How do I convert a Marlin pin number to a Klipper pin name?](#how-do-i-convert-a-marlin-pin-number-to-a-klipper-pin-name)
+17. [How do I cancel an M109/M190 "wait for temperature" request?](#how-do-i-cancel-an-m109m190-wait-for-temperature-request)
+18. [How do I upgrade to the latest software?](#how-do-i-upgrade-to-the-latest-software)
 
 ### How can I donate to the project?
 
@@ -94,16 +97,17 @@ parameters - see the avrdude documentation for further information.
 
 ### How do I change the serial baud rate?
 
-The default baud rate is 250000 in both the Klipper micro-controller
-configuration and in the Klipper host software. This works on almost
-all micro-controllers and it is the recommended setting. (Most online
-guides that refer to a baud rate of 115200 are outdated.)
+The recommended baud rate for Klipper is 250000. This baud rate works
+well on all micro-controller boards that Klipper supports. If you've
+found an online guide recommending a different baud rate, then ignore
+that part of the guide and continue with the default value of 250000.
 
-If you need to change the baud rate, then the new rate will need to be
-configured in the micro-controller (during **make menuconfig**) and
-that updated code will need to be flashed to the micro-controller. The
-Klipper printer.cfg file will also need to be updated to match that
-baud rate (see the example.cfg file for details).  For example:
+If you want to change the baud rate anyway, then the new rate will
+need to be configured in the micro-controller (during **make
+menuconfig**) and that updated code will need to be compiled and
+flashed to the micro-controller. The Klipper printer.cfg file will
+also need to be updated to match that baud rate (see the example.cfg
+file for details).  For example:
 ```
 [mcu]
 baud: 250000
@@ -112,6 +116,11 @@ baud: 250000
 The baud rate shown on the OctoPrint web page has no impact on the
 internal Klipper micro-controller baud rate. Always set the OctoPrint
 baud rate to 250000 when using Klipper.
+
+The Klipper micro-controller baud rate is not related to the baud rate
+of the micro-controller's bootloader. See the
+[bootloader document](Bootloaders.md) for additional information on
+bootloaders.
 
 ### Can I run Klipper on something other than a Raspberry Pi 3?
 
@@ -225,6 +234,35 @@ experience this problem during homing, consider using a slower homing
 speed. If you experience this problem in the middle of a print,
 consider using a lower square_corner_velocity setting.
 
+### I keep getting random "Lost communication with MCU" errors
+
+This is commonly caused by hardware errors on the USB connection
+between the host machine and the micro-controller. Things to look for:
+- Use a good quality USB cable between the host machine and
+  micro-controller. Make sure the plugs are secure.
+- If using a Raspberry Pi, use a good quality power supply for the
+  Raspberry Pi and use a good quality USB cable to connect that power
+  supply to the Pi.
+- Make sure the printer's power supply is not being overloaded. (Power
+  fluctuations to the micro-controller's USB chip may result in resets
+  of that chip.)
+- There have been reports of high USB noise when both the printer's
+  power supply and the host's 5V power supply are mixed. (If you find
+  that the micro-controller powers on when either the printer's power
+  supply is on or the USB cable is plugged in, then it indicates the
+  5V power supplies are being mixed.) It may help to configure the
+  micro-controller to use power from only one source. (Alternatively,
+  if the micro-controller board can not configure its power source,
+  one may modify a USB cable so that it does not carry 5V power
+  between the host and micro-controller.)
+
+### My Raspberry Pi keeps rebooting during prints
+
+This is most likely do to voltage fluctuations. Follow the same
+troubleshooting steps for a
+["Lost communication with MCU"](#i-keep-getting-random-lost-communication-with-mcu-errors)
+error.
+
 ### When I set "restart_method=command" my AVR device just hangs on a restart
 
 Some old versions of the AVR bootloader have a known bug in watchdog
@@ -311,6 +349,17 @@ cases, Marlin chose their own pin numbering scheme. Klipper does not
 support these custom pin numbers - check Marlin's fastio headers (see
 above) to translate these pin numbers to their standard hardware
 names.
+
+### How do I cancel an M109/M190 "wait for temperature" request?
+
+Navigate to the OctoPrint terminal tab and issue an M112 command in
+the terminal box. The M112 command will cause Klipper to enter into a
+"shutdown" state, and it will cause OctoPrint to disconnect from
+Klipper. Navigate to the OctoPrint connection area and click on
+"Connect" to cause OctoPrint to reconnect. Navigate back to the
+terminal tab and issue a FIRMWARE_RESTART command to clear the Klipper
+error state.  After completing this sequence, the previous heating
+request will be canceled and a new print may be started.
 
 ### How do I upgrade to the latest software?
 

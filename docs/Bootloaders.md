@@ -10,7 +10,7 @@ bootloader that works across all micro-controllers. Worse, it is
 common for each bootloader to require a different set of steps to
 flash an application.
 
-If one can flash a bootloader to a micro-controller than one can
+If one can flash a bootloader to a micro-controller then one can
 generally also use that mechanism to flash an application, but care
 should be taken when doing this as one may inadvertently remove the
 bootloader. In contrast, a bootloader will generally only permit a
@@ -195,8 +195,12 @@ SAMD21. One comes standard with the "Arduino Zero" and the other comes
 standard with the "Arduino M0".
 
 The Arduino Zero uses an 8KiB bootloader (the application must be
-compiled with a start address of 8KiB). This document does not cover
-the flashing mechanism for this bootloader.
+compiled with a start address of 8KiB). One can enter the bootloader
+by double clicking the reset button. To flash an application use
+something like:
+```
+bossac -U -p "$(FLASH_DEVICE)" --offset=0x2000 -w out/klipper.bin -v -b -R
+```
 
 The Arduino M0 uses a 16KiB bootloader (the application must be
 compiled with a start address of 16KiB). To flash an application,
@@ -209,11 +213,11 @@ avrdude -c stk500v2 -p atmega2560 -P /dev/ttyACM0 -u -Uflash:w:out/klipper.elf.h
 STM32F103 micro-controllers (Blue Pill devices)
 ===============================================
 
-The STM32F103 devices have a ROM that can flash a bootloader via 3.3V
-serial. To access this ROM, one should connect the "boot 0" pin to
-high and "boot 1" pin to low, and then reset the device. The
-"stm32flash" package can then be used to flash the device using
-something like:
+The STM32F103 devices have a ROM that can flash a bootloader or
+application via 3.3V serial. To access this ROM, one should connect
+the "boot 0" pin to high and "boot 1" pin to low, and then reset the
+device. The "stm32flash" package can then be used to flash the device
+using something like:
 ```
 stm32flash -w out/klipper.bin -v -g 0 /dev/ttyAMA0
 ```
@@ -224,8 +228,33 @@ stm32flash protocol uses a serial parity mode which the Raspberry Pi's
 https://www.raspberrypi.org/documentation/configuration/uart.md for
 details on enabling the full uart on the Raspberry Pi GPIO pins.
 
-This document does not describe the method to flash an application via
-an STM32F103 bootloader.
+After flashing, set both "boot 0" and "boot 1" back to low so that
+future resets boot from flash.
+
+## STM32F103 with stm32duino bootloader ##
+
+The "stm32duino" project has a USB capable bootloader - see:
+https://github.com/rogerclarkmelbourne/STM32duino-bootloader
+
+This bootloader can be flashed via 3.3V serial with something like:
+```
+wget 'https://github.com/rogerclarkmelbourne/STM32duino-bootloader/raw/master/binaries/generic_boot20_pc13.bin'
+
+stm32flash -w generic_boot20_pc13.bin -v -g 0 /dev/ttyAMA0
+```
+
+This bootloader uses 8KiB of flash space (the application must be
+compiled with a start address of 8KiB). Flash an application with
+something like:
+```
+dfu-util -d 1eaf:0003 -a 2 -R -D out/klipper.bin
+```
+
+The bootloader typically runs for only a short period after boot. It
+may be necessary to time the above command so that it runs while the
+bootloader is still active (the bootloader will flash a board led
+while it is running). Alternatively, set the "boot 0" pin to low and
+"boot 1" pin to high to stay in the bootloader after a reset.
 
 LPC176x micro-controllers (Smoothieboards)
 ==========================================
