@@ -103,7 +103,7 @@ class PanelDue:
             message = self.parse_pd_message(line)
 
             if message:
-                logging.info ("executing " + message)
+                #logging.info ("executing " + message)
                 self.execute_command(message)
 
         self.serialdata = readlines[-1]   
@@ -232,7 +232,7 @@ class PanelDue:
         current_babysteps = gcode_status['homing_zpos']
         new_babysteps = current_babysteps + relative_babysteps
 
-        params = self.parse_params("SET_GCODE_OFFSET Z%0.2f" % new_babysteps)
+        params = self.parse_params("SET_GCODE_OFFSET Z=%0.2f" % new_babysteps)
 
         self.gcode.cmd_SET_GCODE_OFFSET(params)     
 
@@ -295,7 +295,7 @@ class PanelDue:
                     if (prefix or fname.endswith('.gcode')):
                         response['files'].append(prefix + str(fname))  
         json_response = json.dumps(response)
-        self.gcode.respond(json_response)
+        self.gcode_respond_callback(json_response)
 
     # FileInfo. Lots of work to do here
     def cmd_M36(self, params):
@@ -313,7 +313,7 @@ class PanelDue:
         response['filament'] = []
         response['generatedBy'] = 'Unknown Slicer'
 
-        self.gcode.respond(json.dumps(response))
+        self.gcode_respond_callback(json.dumps(response))
 
     def get_axes_homed(self, toolhead):
         kin = toolhead.get_kinematics()
@@ -387,10 +387,10 @@ class PanelDue:
         variant = 0
 
         json_response = json.dumps(response)
-        logging.info(json_response)
+        #logging.info(json_response)
         if 'VARIANT' in params:
             variant = self.gcode.get_int('VARIANT', params, minval=0, maxval=3)
-        self.gcode.respond(json_response)
+        self.gcode_respond_callback(json_response)
 
     def printer_state(self, state):
 
