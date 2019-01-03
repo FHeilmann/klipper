@@ -1,6 +1,8 @@
 # PanelDue extra
 #
-# Copyright (C) 2018  Florian Heilmann <Florian.Heilmann@gmx.net>
+# Copyright (C) 2019  Florian Heilmann <Florian.Heilmann@gmx.net>
+#
+# Copyright (C) 2019  John Jardine <john@gprime.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
