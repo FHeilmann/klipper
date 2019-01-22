@@ -3,7 +3,6 @@
 # Copyright (C) 2018  Florian Heilmann <Florian.Heilmann@gmx.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import traceback, logging
 
 DEFAULT_PREFIX = 'var_'
 
@@ -20,11 +19,10 @@ class VariableStore:
         self.kwvars = { o[len(DEFAULT_PREFIX):].upper(): config.get(o)
                           for o in config.get_prefix_options(DEFAULT_PREFIX) }
     def get_vars(self):
-        print(self.kwvars)
         return dict(self.kwvars)
     cmd_SET_VARIABLE_desc = "Set variable value in variable store"
+
     def cmd_SET_VARIABLE(self, params):
-        print(params)
         if 'VARIABLE' in params and 'VALUE' in params:
             if params['VARIABLE'] in self.kwvars:
                 self.kwvars[params['VARIABLE']] = params['VALUE'].decode('string-escape')
