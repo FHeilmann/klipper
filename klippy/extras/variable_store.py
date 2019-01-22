@@ -4,6 +4,8 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
+import logging
+
 DEFAULT_PREFIX = 'var_'
 
 class VariableStore:
@@ -26,6 +28,11 @@ class VariableStore:
         if 'VARIABLE' in params and 'VALUE' in params:
             if params['VARIABLE'] in self.kwvars:
                 self.kwvars[params['VARIABLE']] = params['VALUE'].decode('string-escape')
+            else:
+                msg = "Error setting variable %s: Variable not defined" % (
+                    params['VARIABLE'])
+                logging.exception(msg)
+                raise self.gcode.error(msg)
 
 def load_config(config):
     return VariableStore(config)
