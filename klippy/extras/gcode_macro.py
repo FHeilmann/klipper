@@ -13,6 +13,7 @@ class GCodeMacro:
         self.script = config.get('gcode')
         printer = config.get_printer()
         self.gcode = printer.lookup_object('gcode')
+        self.var_store = printer.lookup_object('variable_store', None)
         try:
             self.gcode.register_command(
                 self.alias, self.cmd, desc=self.cmd_desc)
@@ -29,6 +30,8 @@ class GCodeMacro:
         script = ""
         kwparams = dict(self.kwparams)
         kwparams.update(params)
+        if self.var_store is not None:
+            kwparams.update(**self.var_store.get_vars())
         try:
             script = self.script.format(**kwparams)
         except Exception as e:
