@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+<script src="/js/main.js"></script>
+</head>
+<body>
+<h3>Klippy Web API Test</h3>
+<div id="term" style="width: 60em; height: 20em; overflow:auto; border: 1px solid black">
+</div>
+<br/>
+<input id="cbxAuto" type="checkbox" name="Autoscroll" checked="true"/> Autoscroll
+<input id="cbxSub" type="checkbox" name="AutoSub" checked="true"/> Subscribe on Ready
+<br/><br/>
+<input type="radio" name="test_type" value="http" checked="true">Test HTTP API
+<input type="radio" name="test_type" value="websocket">Test Websocket API
+<br/><br/>
+<form id="gcform">
+<input type="text" />
+<input type="submit" value="Send GCode"/>
+</form>
+<br/>
+<form id="apiform">
+    <input type="text" style="width: 30em" value="/printer/objects/"
+    title="Should be a url for a http request, ie: /printer/objects/, or a json encoded object
+    for a websocket request, ie: {'get_status': {'toolhead': ['position', 'status']}}"/>
+    <input type="submit" value="Send API Command"/>
+</form>
+<br/>
+<div style="display: flex">
+<input type="file" style="display:none" id="upload-file" />
+<div style="width: 10em">
+<button id="btnupload" class="toggleable" style="width: 9em">Upload GCode</button><br/><br/>
+<button id="btndownload" class="toggleable" style="width: 9em">Dowload Gcode</button><br/><br/>
+<button id="btndelete" class="toggleable" style="width: 9em">Delete Gcode</button>
+<a id="hidden_link" href="#" hidden>hidden</a>
+</div>
+<div style="width: 10em">
+  <button id="btnstartprint" class="toggleable" style="width: 9em">Start Print</button><br/><br/>
+  <button id="btnpauseresume" style="width: 9em">Pause Print</button><br/><br/>
+  <button id="btncancelprint" style="width: 9em">Cancel Print</button>
+</div>
+<div>
+<select id="filelist" size="6"></select>
+</div>
+</div>
+<br/>
+Progress: <progress id="progressbar" value="0" max="100"></progress>
+<span id="upload_progress">0%</span><br/><br/>
+<br/>
+<div>
+  <input id="btnsubscribe" type="button" value="Subscribe Test" />
+  <input id="btngetsub" type="button" value="Get Subscribed Objects" />
+</div>
+<br/>
+<div id="streamdiv">
+</div>
+</body>
+</html>
