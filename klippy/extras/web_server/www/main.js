@@ -4,16 +4,28 @@
 //
 //  This file may be distributed under the terms of the GNU GPLv3 license
 
+import JsonRPC from "./json-rpc.js?v=0.1";
+
 var paused = false;
-var subscribe_at_start = false;
-const upload_buffer_size = 8096;
+var api_type = 'http';
+var is_printing = false;
+var json_rpc = new JsonRPC();
+
+function round_float (value) {
+    if (typeof value == "number" && !Number.isInteger(value)) {
+        return value.toFixed(2);
+    }
+    return value;
+}
+
+//****************UI Update Functions****************/
 var line_count = 0;
 function update_term(msg) {
-    var start = '<div id="line' + line_count + '">';
+    let start = '<div id="line' + line_count + '">';
     $("#term").append(start + msg + "</div>");
     line_count++;
     if (line_count >= 50) {
-        var rm = line_count - 50
+        let rm = line_count - 50
         $("#line" + rm).remove();
     }
     if ($("#cbxAuto").is(":checked")) {
@@ -22,13 +34,6 @@ function update_term(msg) {
         }, 800);
     }
 }
-
-function round_float (value) {
-    if (typeof value == "number" && !Number.isInteger(value)) {
-        return value.toFixed(2);
-    }
-    return value;
-};
 
 const max_stream_div_width = 5;
 var stream_div_width = max_stream_div_width;
@@ -40,14 +45,14 @@ function update_streamdiv(obj, attr, val) {
         $('#streamdiv').append("<div id='sdrow" + stream_div_height +
                                "' style='display: flex'></div>");
     }
-    var id = obj + "_" + attr;
+    let id = obj + "_" + attr;
     if ($("#" + id).length == 0) {
         $('#sdrow' + stream_div_height).append("<div style='width: 10em; border: 2px solid black'>"
             + obj + " " + attr + ":<div id='" + id + "'></div></div>");
         stream_div_width++;
     }
 
-    var out = "";
+    let out = "";
     if (val instanceof Array) {
         val.forEach((value, idx, array) => {
             out += round_float(value);
@@ -63,17 +68,16 @@ function update_streamdiv(obj, attr, val) {
 
 function update_filelist(filelist) {
     $("#filelist").empty();
-    filelist.forEach(file => {
+    for (let file of filelist) {
         $("#filelist").append(
             "<option value='" + file.filename + "'>" +
             file.filename + "</option>");
-    });
+    }
 }
 
-// TODO: Change to a progress bar that can be used for downloads and uploads
 var last_progress = 0;
 function update_progress(loaded, total) {
-    var progress = parseInt(loaded / total * 100);
+    let progress = parseInt(loaded / total * 100);
     if (progress - last_progress > 1 || progress >= 100) {
         if (progress >= 100) {
             last_progress = 0;
@@ -87,15 +91,413 @@ function update_progress(loaded, total) {
     }
 }
 
-// A simple reconnecting websocket with extra helpers to process
-// Klippy specific server events.
+function update_error(cmd, msg) {
+    if (msg instanceof Object)
+        msg = JSON.stringify(msg);
+    // Handle server error responses
+    update_term("Command [" + cmd + "] resulted in an error: " + msg);
+    console.log("Error processing " + cmd +": " + msg);
+}
+//***********End UI Update Functions****************/
+
+//***********Websocket-Klipper API Functions (JSON-RPC)************/
+function ping() {
+    json_rpc.call_method('ping')
+    .then((result) => {
+        // result is an "ok" acknowledgment that the gcode has
+        // been successfully processed
+        console.log("Ping got PONG");
+    })
+    .catch((error) => {
+        update_error("ping", error);
+    });
+}
+
+function get_file_list() {
+    json_rpc.call_method('get_file_list')
+    .then((result) => {
+        // result is an "ok" acknowledgment that the gcode has
+        // been successfully processed
+        update_filelist(result);
+    })
+    .catch((error) => {
+        update_error("get_file_list", error);
+    });
+}
+
+function get_klippy_info() {
+    // A "get_klippy_info" websocket request.  It returns
+    // the hostname (which should be equal to location.host), the
+    // build version, and if the Host is ready for commands.  Its a
+    // good idea to fetch this information after the websocket connects.
+    // If the Host is in a "ready" state, we can do some initialization
+    json_rpc.call_method('get_klippy_info')
+    .then((result) => {
+        update_term("Klippy Hostname: " + result.hostname +
+                " | Build Version: " + result.version);
+        if (result.is_ready) {
+            // We know the host is ready, lets find out if the printer is
+            // ready by requesting the idle_timeout status
+            get_status({idle_timeout: [], pause_resume: []});
+        } else {
+            run_gcode("STATUS");
+        }
+
+    })
+    .catch((error) => {
+        update_error("get_klippy_info", error);
+    });
+}
+
+function run_gcode(gcode) {
+    json_rpc.call_method('run_gcode', gcode)
+    .then((result) => {
+        // result is an "ok" acknowledgment that the gcode has
+        // been successfully processed
+        update_term(result);
+    })
+    .catch((error) => {
+        update_error("run_gcode", error);
+    });
+}
+
+function get_status(printer_objects) {
+    // Note that this is just an example of one particular use of get_status.
+    // In a robust client you would likely pass a callback to this function
+    // so that you can respond to various status requests.  It would also
+    // be possible to subscribe to status requests and update the UI accordingly
+    json_rpc.call_method('get_status', printer_objects)
+    .then((result) => {
+        if ("idle_timeout" in result) {
+            // Its a good idea that the user understands that some functionality,
+            // such as file manipulation, is disabled during a print.  This can be
+            // done by disabling buttons or by notifying the user via a popup if they
+            // click on an action that is not allowed.
+            if ("state" in result.idle_timeout) {
+                let state = result.idle_timeout.state.toLowerCase();
+                is_printing = (state == "printing");
+                $('.toggleable').prop(
+                    'disabled', (api_type == 'websocket' || is_printing));
+                $('#btnstartprint').prop('disabled', is_printing);
+            }
+        }
+        if ("pause_resume" in result) {
+            if ("is_paused" in result.pause_resume) {
+                paused = result.pause_resume.is_paused;
+                let label = paused ? "Resume Print" : "Pause Print";
+                $('#btnpauseresume').text(label);
+            }
+        }
+        console.log(result);
+    })
+    .catch((error) => {
+        update_error("get_status", error);
+    });
+}
+
+function get_object_info() {
+    json_rpc.call_method('get_object_info')
+    .then((result) => {
+        // result will be a dictionary containing all available printer
+        // objects available for query or subscription
+        console.log(result);
+    })
+    .catch((error) => {
+        update_error("get_object_info", error);
+    });
+}
+
+function add_subscription(printer_objects) {
+    json_rpc.call_method('add_subscription', printer_objects)
+    .then((result) => {
+        // result is simply an "ok" acknowledgement that subscriptions
+        // have been added for requested objects
+        console.log(result);
+    })
+    .catch((error) => {
+        update_error("add_subscription", error);
+    });
+}
+
+function get_subscribed() {
+    json_rpc.call_method('get_subscribed')
+    .then((result) => {
+        // result is a dictionary containing all currently subscribed
+        // printer objects/attributes
+        console.log(result);
+    })
+    .catch((error) => {
+        update_error("get_subscribed", error);
+    });
+}
+
+function get_endstops() {
+    json_rpc.call_method('get_endstops')
+    .then((result) => {
+        // A response to a "get_endstops" websocket request.
+        // The result contains an object of key/value pairs,
+        // where the key is the endstop (ie:x, y, or z) and the
+        // value is either "open" or "TRIGGERED".
+        console.log(result);
+    })
+    .catch((error) => {
+        update_error("get_endstops", error);
+    });
+}
+
+function start_print(file_name) {
+    json_rpc.call_method('start_print', file_name)
+    .then((result) => {
+        // result is an "ok" acknowledgement that the
+        // print has started
+        console.log(result);
+    })
+    .catch((error) => {
+        update_error("start_print", error);
+    });
+}
+
+function cancel_print() {
+    json_rpc.call_method('cancel_print')
+    .then((result) => {
+        // result is an "ok" acknowledgement that the
+        // print has been canceled
+        console.log(result);
+    })
+    .catch((error) => {
+        update_error("cancel_print", error);
+    });
+}
+
+function pause_print() {
+    json_rpc.call_method('pause_print')
+    .then((result) => {
+        // result is an "ok" acknowledgement that the
+        // print has been paused
+        console.log("Pause Command Executed")
+    })
+    .catch((error) => {
+        update_error("pause_print", error);
+    });
+}
+
+function resume_print() {
+    json_rpc.call_method('resume_print')
+    .then((result) => {
+        // result is an "ok" acknowledgement that the
+        // print has been resumed
+        console.log("Resume Command Executed")
+    })
+    .catch((error) => {
+        update_error("resume_print", error);
+    });
+}
+
+function restart() {
+    // We are unlikely to receive a response from a restart
+    // request as the websocket will disconnect, so we will
+    // call json_rpc.notify instead of call_function.
+    json_rpc.notify('restart');
+}
+
+function firmware_restart() {
+    // As above, we would not likely receive a response from
+    // a firmware_restart request
+    json_rpc.notify('firmware_restart');
+}
+//***********End Websocket-Klipper API Functions (JSON-RPC)********/
+
+//***********Klipper Event Handlers (JSON-RPC)*********************/
+
+function handle_gcode_response(response) {
+    // This event contains all gcode responses that would
+    // typically be printed to the terminal.  Its possible
+    // That multiple lines can be bundled in one response,
+    // so if displaying we want to be sure we split them.
+    let messages = response.split("\n");
+    for (let msg of messages) {
+        update_term(msg);
+    }
+}
+json_rpc.register_method("notify_gcode_response", handle_gcode_response);
+
+function handle_status_update(status) {
+    // This is subscribed status data.  Here we do a nested
+    // for-each to determine the klippy object name ("name"),
+    // the attribute we want ("attr"), and the attribute's
+    // value ("val")
+    for (let name in status) {
+        let obj = status[name];
+        for (let attr in obj) {
+            let val = obj[attr];
+            update_streamdiv(name, attr, val);
+        }
+    }
+}
+json_rpc.register_method("notify_status_update", handle_status_update);
+
+function handle_printer_state(state) {
+    // Printer State can be "ready", "printing", or "idle".  Here
+    // We disable a few buttons when the printer is printing to
+    // prevent file manipulation.  The server won't allow it regardless,
+    // but its a good idea to make sure the user knows that via the
+    // client.
+    update_term("Klippy State: " + state);
+    is_printing = (state == "printing");
+    $('.toggleable').prop(
+        'disabled', (api_type == 'websocket' || is_printing));
+    $('#btnstartprint').prop('disabled', is_printing);
+}
+json_rpc.register_method("notify_printer_state_changed", handle_printer_state);
+
+function handle_klippy_state(state) {
+    // Klippy state can be "ready", "disconnect", and "shutdown".  This
+    // differs from Printer State in that it represents the status of
+    // the Host software
+    switch(state) {
+        case "ready":
+            // Printer just came online, now is a good time to
+            // intialize/refresh state.  It would also be a good
+            // place to subscribe to status updates
+            get_file_list();
+            get_status({idle_timeout: [], pause_resume: []});
+
+            // Initialize the state of the file transfer buttons.  If
+            // we are testing the websocket api they should be disabled,
+            // otherwise enabled
+            $('.toggleable').prop('disabled', (api_type == 'websocket'));
+
+            if ($("#cbxSub").is(":checked")) {
+                // If autosubscribe is check, request the subscription now
+                const sub = {
+                    gcode: ["gcode_position", "speed", "speed_factor", "extrude_factor"],
+                    toolhead: [],
+                    virtual_sdcard: [],
+                    heater_bed: [],
+                    extruder: ["temperature", "target"],
+                    fan: []};
+                add_subscription(sub);
+            }
+            break;
+        case "disconnect":
+            // Klippy has disconnected from the MCU and is prepping to
+            // restart.  The client will receive this signal right before
+            // the websocket disconnects.  If we need to do any kind of
+            // cleanup on the client to prepare for restart this would
+            // be a good place.
+            update_term("Klippy Disconnected, Preparing for Restart");
+            break;
+        case "shutdown":
+            // Either M112 was entered or there was a printer error.  We
+            // probably want to notify the user and disable certain controls.
+            update_term("Klipper has shutdown, check klippy.log for info");
+            break;
+    }
+}
+json_rpc.register_method("notify_klippy_state_changed", handle_klippy_state);
+
+function handle_file_list_changed(file_info) {
+    // This event fires when a client has either added or removed
+    // a gcode file.
+    update_filelist(file_info.filelist);
+}
+json_rpc.register_method("notify_filelist_changed", handle_file_list_changed);
+
+function handle_paused_state(state) {
+    // The state may be "paused", "resumed", or "cleared"
+    if (state == 'paused') {
+        // Paused event received, update client state
+        $('#btnpauseresume').text("Resume Print");
+        paused = true;
+    } else {
+        // Either the print resumed or the pause was cleared.
+        // Note that it is common for printers to clear the
+        // pause state in their start, cancel, and/or end gcodes.
+        // Clients should be aware that they may receive multiple
+        // events with a "cleared" state, even if the printer was
+        // never paused.
+
+        $('#btnpauseresume').text("Pause Print");
+        paused = false;
+    }
+    console.log("Paused state changed: " + state);
+}
+json_rpc.register_method("notify_paused_state_changed", handle_paused_state);
+//***********End Klipper Event Handlers (JSON-RPC)*****************/
+
+// The function below is an example of one way to use JSON-RPC's batch send
+// method.  Generally speaking it is better and easier to use individual
+// requests, as matching requests with responses in a batch requires more
+// work from the developer
+function send_gcode_batch(gcodes) {
+    // The purpose of this function is to provide an example of a JSON-RPC
+    // "batch request".  This function takes an array of gcodes and sends
+    // them as a batch command.  This would behave like a Klipper Gcode Macro
+    // with one signficant difference...if one gcode in the batch requests
+    // results in an error, Klipper will continue to process subsequent gcodes.
+    // A Klipper Gcode Macro will immediately stop execution of the macro
+    // if an error is encountered.
+
+    let batch = [];
+    for (let gc of gcodes) {
+        batch.push(
+            {
+                method: 'run_gcode',
+                type: 'request',
+                params: [gc]
+            });
+    }
+
+    // The batch request returns a promise with all results
+    json_rpc.send_batch_request(batch)
+    .then((results) => {
+        for (let res of results) {
+            // Each result is an object with three keys:
+            // method:  The method executed for this result
+            // index:  The index of the original request
+            // result: The successful result
+
+
+            // Use the index to look up the gcode parameter in the original
+            // request
+            let orig_gcode = batch[res.index].params[0];
+            console.log("Batch Gcode " + orig_gcode +
+            " successfully executed with result: " + res.result);
+        }
+    })
+    .catch((err) => {
+        // Like the result, the error is an object.  However there
+        // is an "error" in place of the "result key"
+        let orig_gcode = batch[err.index].params[0];
+        console.log("Batch Gcode <" + orig_gcode +
+        "> failed with error: " + err.error.message);
+    });
+}
+
+// The function below demonstrates a more useful method of sending
+// a client side gcode macro.  Like a Klipper macro, gcode execution
+// will stop immediately upon encountering an error.  The advantage
+// of a client supporting their own macros is that there is no need
+// to restart the klipper host after creating or deleting them.
+async function send_gcode_macro(gcodes) {
+    for (let gc of gcodes) {
+        try {
+            let result = await json_rpc.call_method('run_gcode', gc);
+        } catch (err) {
+            console.log("Error executing gcode macro: " + err.message);
+            break;
+        }
+    }
+}
+
+// A simple reconnecting websocket
 class KlippyWebsocket {
     constructor(addr) {
         this.base_address = addr;
         this.connected = false;
         this.ws = null;
-        this.pending_upload = null;
-        this.pending_download = false;
+        this.onmessage = null;
+        this.onopen = null;
         this.connect();
     }
 
@@ -104,20 +506,12 @@ class KlippyWebsocket {
         // to reconnect if its closed. This is nice as it allows the
         // client to easily recover from Klippy restarts without user
         // intervention
-        this.pending_upload = null;
-        this.pending_download = null;
         this.ws = new WebSocket(this.base_address + "/websocket");
-        this.ws.binaryType = "blob";
         this.ws.onopen = () => {
             this.connected = true;
             console.log("Websocket connected");
-            // Go ahead and do some initialization, the commands below
-            // do not need Klippy to be "ready" to return valid info. It
-            // isn't necesary to do the request over the websocket, you
-            // could just as easily send HTTP GET requests here for the
-            // klippy info and the file list.
-            this.send((JSON.stringify({get_klippy_info: ""})));
-            this.send((JSON.stringify({get_file_list: ""})));
+            if (this.onopen != null)
+                this.onopen();
         };
 
         this.ws.onclose = (e) => {
@@ -125,7 +519,7 @@ class KlippyWebsocket {
             console.log("Websocket Closed, reconnecting in .5s: ", e.reason);
             setTimeout(() => {
                 this.connect();
-            }, 500);
+            }, 1000);
         };
 
         this.ws.onerror = (err) => {
@@ -134,402 +528,103 @@ class KlippyWebsocket {
         };
 
         this.ws.onmessage = (e) => {
-            if (this.pending_download != null) {
-                // Incoming Download, save parts to disk then launch save dialog
-                this.process_download(e.data);
-            } else {
-                // Everything over the websocket arrives as a Binary
-                // Blob.  We need to use a FileReader object to read the blob
-                // as text, then use JSON.parse() to convert the result into an
-                // object
-                var reader = new FileReader();
-                reader.onload = () => {
-                    var response = JSON.parse(reader.result);
-                    this.process_command(response);
+            // Everything over the websocket arrives as a Binary
+            // Blob.  We need to use a FileReader object to read the blob
+            // as text. The JSON_RPC class will then use JSON.parse()
+            // to convert the result into a structure (array or object)
+            let reader = new FileReader();
+            reader.onload = () => {
+                if (this.onmessage != null)
+                    this.onmessage(reader.result);
             };
             reader.readAsText(e.data);
-            }
         };
     }
 
-    process_download(bytes) {
-        // Process the chunks of binary data received from the server.  They
-        // are added to a list.  As shown below, it is possible to update a
-        // status indicator here.  When the expected number of chunks are
-        // received, the entire file is created from the list and the user
-        // is prompted to save it.  It isn't as clean as the REST API, however
-        // its good enough for our uses.  Most likely clients would download
-        // a copy when the user wants to start a print so a gcode preview can
-        // be produced.
-        this.pending_download.parts.push(bytes);
-        var loaded = this.pending_download.parts.length * this.pending_download.chunk_size;
-        update_progress(loaded, this.pending_download.size);
-        if (this.pending_download.parts.length >= this.pending_download.chunks) {
-            var file = new Blob(this.pending_download.parts);
-            var url = URL.createObjectURL(file);
-            $('#hidden_link').attr('href', url);
-            $('#hidden_link').attr('download', this.pending_download.filename);
-            $('#hidden_link')[0].click();
-            this.pending_download = null;
-        }
-    }
-
-    process_command(response) {
-        // Handle Server Events and Command Responses
-        switch(response.command) {
-            case "gcode_response":
-                // This event contains all gcode responses that would
-                // typically be printed to the terminal.  Its possible
-                // That multiple lines can be bundled in one response,
-                // so if displaying we want to be sure we split them.
-                var messages = response.data.split("\n");
-                messages.forEach((msg) => {
-                    update_term(msg);
-                });
-                break;
-            case "status_update_event":
-                // This is subscribed status data.  Here we do a nested
-                // for-each to determine the klippy object name, "cmd",
-                // the attribute we want, "attr", and the attribute's
-                // value, "val"
-                $.each(response.data, (cmd, obj) => {
-                    $.each(obj, (attr, val) => {
-                        update_streamdiv(cmd, attr, val);
-                    });
-                });
-                break;
-            case "printer_state_event":
-                // Printer State can be "ready", "printing", or "idle".  Here
-                // We disable a few buttons when the printer is printing to
-                // prevent file manipulation.  The server won't allow it regardless,
-                // but its a good idea to make sure the user knows that via the
-                // client.
-                update_term("Klippy State: " + response.data);
-                $('.toggleable').prop('disabled', response.data == "printing");
-                break;
-            case "klippy_state_event":
-                // Klippy state can be "ready", "disconnect", and "shutdown".  This
-                // differs from Printer State in that it represents the status of
-                // the Host software
-                this.process_klippy_state(response.data);
-                break;
-            case "file_changed_event":
-                // This event fires when a client has either added or removed
-                // a gcode file.
-                update_filelist(response.data.filelist);
-                break;
-            case "get_klippy_info":
-                // A response to a "get_klippy_info" websocket request.  It returns
-                // the hostname (which should be equal to location.host), the
-                // build version, and if the Host is ready for commands.  Its a
-                // good idea to fetch this information after the websocket connects.
-                // If the Host is in a "ready" state, we can do some initialization
-                update_term("Klippy Hostname: " + response.data.hostname +
-                " | Build Version: " + response.data.version);
-                if (response.data.is_ready) {
-                    // We know the host is ready, lets find out if the printer is
-                    // ready by requesting the idle_timeout status
-                    this.send((JSON.stringify({get_status: {idle_timeout: [],
-                        pause_resume: []}})));
-                } else {
-                    this.send((JSON.stringify({run_gcode: "STATUS"})));
-                }
-                break;
-            case "get_status":
-                // A response to a "get_status" websocket request
-                if ("idle_timeout" in response.data) {
-                    // As mentioned above, its a good idea that the user understands
-                    // that some functionality, such as file manipulation, is disabled
-                    // during a print.  This can be done by disabling buttons or by
-                    // notifying the user via a popup if they click on an action that
-                    // is not allowed.
-                    if ("state" in response.data.idle_timeout) {
-                        var state = response.data.idle_timeout.state.toLowerCase();
-                        $('.toggleable').prop('disabled', state == "printing");
-                    }
-                }
-                if ("pause_resume" in response.data) {
-                    if ("is_paused" in response.data.pause_resume) {
-                        paused = response.data.pause_resume.is_paused;
-                        var label = paused ? "Resume Print" : "Pause Print";
-                        $('#btnpauseresume').text(label);
-                    }
-                }
-            case "query_endstops":
-                // A response to a "query_endstops" websocket request.
-                // The 'data' attribute contains an object of key/value pairs,
-                // where the key is the endstop (ie:x, y, or z) and the value
-                // is either "open" or "TRIGGERED".
-            case "get_object_info":
-                // A response to a "get_object_info" websocket request.
-                // The 'data' attribute contains a list of items available for status query
-            case "get_subscribed":
-                // A response to a "get_subscribed" websocket request.
-                // The 'data' attribute contains a list of objects containing information
-                // about current subscriptions.
-                console.log(response.data);
-                break;
-            case "get_file_list":
-                // A response to a "get_file_list" websocket request.
-                update_filelist(response.data);
-                break;
-            case "upload_file":
-                // A response to a "upload_file" websocket request.  See the process_upload
-                // function for details on the implementation
-                this.process_upload(response.data);
-                break;
-            case "download_file":
-                // A response to a "download_file" websocket request.  The websocket will
-                // first send back information about the file requested for download.  Below,
-                // that information is stored to "this.pending_download".  Once this is done,
-                // the server will send the file in parts.  The websocket's onMessage() callback
-                // must be able to diffentiate between commands a binary file data.  When the
-                // download is complete, the webserver will emit the "download_file" response,
-                // to be processed here as shown below (we simply log that the download is complete)
-                if (response.data == "complete") {
-                    console.log("Download Complete");
-                } else {
-                    this.pending_download = response.data;
-                    this.pending_download.parts = [];
-                }
-                break;
-            case "delete_file":
-                // A resposne to a "delete_file" websocket request.
-                if (response.data == "ok") {
-                    console.log("File deleted");
-                }
-                break;
-            case "pause_print":
-                if (response.data == "ok") {
-                    $('#btnpauseresume').text("Resume Print");
-                    paused = true;
-                }
-                break;
-            case "resume_print":
-                if (response.data == "ok") {
-                    $('#btnpauseresume').text("Pause Print");
-                    paused = false;
-                }
-                break;
-            case "server_error":
-                // If any command results in an error on the server, the server will
-                // respond with "server_error".  The error can then be handled by the
-                // client accordingly.
-                this.process_error(response);
-                break;
-            default:
-                console.log(response.data);
-        }
-    }
-
-    process_klippy_state(state) {
-        switch(state) {
-            case "ready":
-                // Printer just came online, now is a good time to
-                // intialize/refresh state.  It would also be a good
-                // place to subscribe to status updates
-                this.send((JSON.stringify({get_file_list: ""})));
-                this.send((JSON.stringify({get_status: {idle_timeout: [],
-                    pause_resume: []}})));
-                // Go ahead and make sure none o the buttons are disabled.
-                $('.toggleable').prop('disabled', false);
-
-                if ($("#cbxSub").is(":checked")) {
-                    const cmd = {add_subscription:
-                        {gcode: ["gcode_position", "speed", "speed_factor", "extrude_factor"],
-                        toolhead: [],
-                        virtual_sdcard: [],
-                        heater_bed: [],
-                        extruder: ["temperature", "target"],
-                        fan: []}};
-                    this.send(JSON.stringify(cmd));
-                }
-                break;
-            case "disconnect":
-                // Klippy has disconnected from the MCU and is prepping to
-                // restart.  The client will receive this signal right before
-                // the websocket disconnects.  If we need to do any kind of
-                // cleanup on the client to prepare for restart this would
-                // be a good place.
-                update_term("Klippy Disconnected, Preparing for Restart");
-                break;
-            case "shutdown":
-                // Either M112 was entered or there was a printer error.  We
-                // probably want to notify the user and disable certain controls.
-                update_term("Klipper has shutdown, check klippy.log for info");
-                break;
-        }
-    }
-
-    process_upload(data) {
-        // Here we are handling responses to an "upload_file" request
-        // from the client
-        switch (data.state) {
-            case "ready":
-                // The server is ready to receive binary data.  The "chunk"
-                // attribute tells us which chunk the server is requesting.
-                // We can use this data to slice the blob representing the
-                // file upload, we can also use it to update a progrees
-                // indicator
-                var start = data.chunk * upload_buffer_size;
-                var end = start + upload_buffer_size;
-                var slice = this.pending_upload.slice(start, end)
-                this.ws.send(slice);
-                update_progress(end, this.pending_upload.size)
-                break;
-            case "complete":
-                // The server has successfully received the complete upload
-                console.log("Websocket Upload Complete")
-                this.pending_upload = null;
-                break;
-            default:
-                // This shouldn't be reached.  If it does then there is some kind
-                // of logic error on the server.
-                this.pending_upload = null;
-                update_term(data);
-        }
-    }
-
-    process_error(response) {
-        // Handle server error responses
-        switch(response.data.command) {
-            case "upload_file":
-                // There was an error uploading the file.  We reset
-                // the pending upload to null so other parts of the
-                // client can send requests over the websocket
-                this.pending_upload = null;
-                break;
-            case "download_file":
-                // There was an error processing the file download.
-                // Reset to null so the client can receive responses
-                this.pending_download = null;
-                break;
-        }
-        update_term("Command [" + response.data.command +
-        "] resulted in an error: " + response.data.message);
-    }
-
     send(data) {
-        // Only allow send if connected and if there is no current
-        // upload pending (we don't want to mix messages during a
-        // multi-part upload)
-        if (this.connected && this.pending_upload == null) {
+        // Only allow send if connected
+        if (this.connected) {
             this.ws.send(data);
         } else {
-            console.log("Cannot Send data over websocket");
+            console.log("Websocket closed, cannot send data");
         }
     }
 
-    prepare_file_upload(file) {
-        if (this.pending_upload != null) {
-            console.log("File Send in progress, cannot send another")
-            return;
-        }
-        // File Uploads over the websocket need to send some information so the server
-        // can prepare itself to retrieve the upload.  The upload_buffer_size should be
-        // no larger than 8096 bytes, the eventlet websocket does not like larger buffers.
-        // Determine how many "chunks" need to be sent, then send the "upload_file" request
-        // with the file name, file size, chunk count, and buffer size.
-        this.pending_upload = file;
-        var chunk_count = Math.ceil(file.size / upload_buffer_size);
-        this.ws.send(JSON.stringify({upload_file: {filename: file.name, size: file.size,
-                                     chunks: chunk_count, chunk_size: upload_buffer_size}}));
-    }
 };
 
 window.onload = () => {
-    var prefix = this.location.protocol == "https" ? "wss://" : "ws://";
-    var ws = new KlippyWebsocket(prefix + location.host);
+    let prefix = window.location.protocol == "https" ? "wss://" : "ws://";
+    let ws = new KlippyWebsocket(prefix + location.host);
+    ws.onopen = () => {
+        // Go ahead and do some initialization, the commands below
+        // do not need Klippy to be "ready" to return valid info. It
+        // isn't necesary to do the request over the websocket, you
+        // could just as easily send HTTP GET requests here for the
+        // klippy info and the file list.
+
+        // These could be implemented JSON RPC Batch requests and send both
+        // at the same time, however it is easier to simply do them
+        // individually
+        get_klippy_info();
+        get_file_list();
+    };
+    json_rpc.register_transport(ws);
+
+    // Handle changes between the HTTP and Websocket API
+    $('.reqws').prop('disabled', true);
+    $('input[type=radio][name=test_type]').on('change', function() {
+        api_type = $(this).val();
+         $('.toggleable').prop(
+             'disabled', (api_type == 'websocket' || is_printing));
+        $('.reqws').prop('disabled', (api_type == 'http'));
+    });
 
     // Send a gcode.  Note that in the test client nearly every control
     // checks a radio button to see if the request should be sent via
     // the REST API or the Websocket API.  A real client will choose one
-    // or the other, so the "sendtype" check will be unnecessary
+    // or the other, so the "api_type" check will be unnecessary
     $('#gcform').submit((evt) => {
-        var line = $('#gcform [type=text]').val();
+        let line = $('#gcform [type=text]').val();
         $('#gcform [type=text]').val('');
         update_term(line);
-        var sendtype = $('input[name=test_type]:checked').val();
-        if (sendtype == 'http') {
-            var gc_url = "/printer/gcode/" + line
+        if (api_type == 'http') {
+            let gc_url = "/printer/gcode/" + line
             // send a HTTP "run gcode" command
             $.post(gc_url, (data, status) => {
-                update_term(data.data);
+                update_term(data.result);
             });
         } else {
             // Send a websocket "run gcode" command.
-            var req = JSON.stringify({run_gcode: line});
-            ws.send(req);
+            run_gcode(line);
         }
         return false;
     });
 
     // Send a command to the server.  This can be either an HTTP
-    // get request formatted as the endpoint(ie: /objects/) or
+    // get request formatted as the endpoint(ie: /objects) or
     // a websocket command.  The websocket command needs to be
     // formatted as if it were already json encoded.
     $('#apiform').submit((evt) => {
         // Send to a user defined endpoint and log the response
-        var sendtype = $('input[name=test_type]:checked').val();
-        if (sendtype == 'http') {
-            var url = $('#apiform [type=text]').val();
+        if (api_type == 'http') {
+            let url = $('#apiform [type=text]').val();
             $.get(url, (resp, status) => {
                 console.log(resp);
             });
         } else {
-            var cmd = $('#apiform [type=text]').val();
-            ws.send(cmd);
+            let cmd = $('#apiform [type=text]').val().split(',', 2);
+            let method = cmd[0].trim();
+            if (cmd.length > 1) {
+                let args = cmd[1].trim();
+                if (args.startsWith("{")) {
+                    args = JSON.parse(args);
+                }
+                json_rpc.call_method(method, args);
+            } else {
+                json_rpc.call_method(method);
+            }
         }
         return false;
-    });
-
-    // Subscription Request
-    $('#btnsubscribe').click(() => {
-        var sendtype = $('input[name=test_type]:checked').val();
-        if (sendtype == 'http') {
-            // Endpoint is identical to the "get_status" request, however it adds
-            // "text/event-stream" to the Accept header
-            const suburl = "/printer/objects/?gcode=gcode_position,speed,speed_factor,extrude_factor" +
-                    "&toolhead&virtual_sdcard&heater_bed&extruder=temperature,target&fan";
-            $.get({
-                url: suburl,
-                headers: {
-                Accept: "text/event-stream"
-                },
-                success: (data, status) => {
-                    console.log(data);
-                }
-            });
-        } else {
-            const cmd = {add_subscription:
-                {gcode: ["gcode_position", "speed", "speed_factor", "extrude_factor"],
-                toolhead: [],
-                virtual_sdcard: [],
-                heater_bed: [],
-                extruder: ["temperature", "target"],
-                fan: []}};
-            ws.send(JSON.stringify(cmd));
-        }
-    });
-
-    // Get subscription info, adds "text/event-stream" header
-    $('#btngetsub').click(() => {
-        var sendtype = $('input[name=test_type]:checked').val();
-        if (sendtype == 'http') {
-            // Endpoint is identical to the "get_object_info" request, however it adds
-            // "text/event-stream" to the Accept header
-            $.get({
-                url: "/printer/objects/",
-                headers: {
-                Accept: "text/event-stream"
-                },
-                success: (resp, status) => {
-                    console.log(resp);
-                }
-            });
-        } else {
-            ws.send(JSON.stringify({get_subscribed: ""}));
-        }
     });
 
     //  Hidden file element's click is forwarded to the button
@@ -540,17 +635,17 @@ window.onload = () => {
     // Uploads a selected file to the server
     $('#upload-file').change(() => {
         update_progress(0, 100);
-        var file = $('#upload-file').prop('files')[0];
+        let file = $('#upload-file').prop('files')[0];
         if (file) {
             console.log("Sending Upload Request...");
             // It might not be a bad idea to validate that this is
             // a gcode file here, and reject and other files.
-            var sendtype = $('input[name=test_type]:checked').val();
+
             // If you want to allow multiple selections, the below code should be
-            // done in a loop, and the 'var file' above should be the entire
+            // done in a loop, and the 'let file' above should be the entire
             // array of files and not the first element
-            if (sendtype == 'http') {
-                var fdata = new FormData();
+            if (api_type == 'http') {
+                let fdata = new FormData();
                 fdata.append("file", file);
                 $.ajax({
                     url: "/printer/files/upload",
@@ -560,7 +655,7 @@ window.onload = () => {
                     processData: false,
                     method: 'POST',
                     xhr: () => {
-                        var xhr = new window.XMLHttpRequest();
+                        let xhr = new window.XMLHttpRequest();
                         xhr.upload.addEventListener("progress", (evt) => {
                             if (evt.lengthComputable) {
                                 update_progress(evt.loaded, evt.total);
@@ -574,7 +669,7 @@ window.onload = () => {
                     }
                 });
             } else {
-                ws.prepare_file_upload(file);
+                console.log("File Upload not supported over websocket")
             }
             $('#upload-file').val('');
         }
@@ -584,16 +679,15 @@ window.onload = () => {
     // whatever is selected in the <select> element
     $('#btndownload').click(() => {
         update_progress(0, 100);
-        var filename = $("#filelist").val();
+        let filename = $("#filelist").val();
         if (filename) {
-            var sendtype = $('input[name=test_type]:checked').val();
-            if (sendtype == 'http') {
-                var url = "http://" + location.host + "/printer/files/";
+            if (api_type == 'http') {
+                let url = "http://" + location.host + "/printer/files/";
                 url += filename
                 $('#hidden_link').attr('href', url);
                 $('#hidden_link')[0].click();
             } else {
-                ws.send(JSON.stringify({download_file: {filename: filename}}));
+                console.log("File Download not supported over websocket")
             }
         }
     });
@@ -601,11 +695,10 @@ window.onload = () => {
     // Delete a file from the server.  This implementation deletes
     // whatever is selected in the <select> element
     $("#btndelete").click(() =>{
-        var filename = $("#filelist").val();
+        let filename = $("#filelist").val();
         if (filename) {
-            var sendtype = $('input[name=test_type]:checked').val();
-            if (sendtype == 'http') {
-                var url = "/printer/files/" + filename;
+            if (api_type == 'http') {
+                let url = "/printer/files/" + filename;
                 $.ajax({
                     url: url,
                     method: 'DELETE',
@@ -615,7 +708,7 @@ window.onload = () => {
                     }
                 });
             } else {
-                ws.send(JSON.stringify({delete_file: {filename: filename}}));
+                console.log("File Delete not supported over websocket")
             }
         }
     });
@@ -623,17 +716,16 @@ window.onload = () => {
     // Start a print.  This implementation starts the print for the
     // file selected in the <select> element
     $("#btnstartprint").click(() =>{
-        var filename = $("#filelist").val();
+        let filename = $("#filelist").val();
         if (filename) {
-            var sendtype = $('input[name=test_type]:checked').val();
-            if (sendtype == 'http') {
-                var url = "/printer/print/start/" + filename;
+            if (api_type == 'http') {
+                let url = "/printer/print/start/" + filename;
                 $.post(url, (resp, status) => {
                         console.log(resp);
                         return false;
                 });
             } else {
-                ws.send(JSON.stringify({start_print: filename}));
+                start_print(filename);
             }
         }
     });
@@ -641,33 +733,137 @@ window.onload = () => {
     // Pause/Resume a currently running print.  The specific gcode executed
     // is configured in printer.cfg.
     $("#btnpauseresume").click(() =>{
-        var sendtype = $('input[name=test_type]:checked').val();
-        if (sendtype == 'http') {
-            var url = paused ? "/printer/print/resume" : "/printer/print/pause";
+        if (api_type == 'http') {
+            let url = paused ? "/printer/print/resume" : "/printer/print/pause";
             $.post(url, (resp, status) => {
                 paused = !paused;
-                var label = paused ? "Resume Print" : "Pause Print";
+                let label = paused ? "Resume Print" : "Pause Print";
                 $('#btnpauseresume').text(label);
                 return false;
             });
         } else {
-            var cmd = paused ? {resume_print: ""} : {pause_print: ""};
-            ws.send(JSON.stringify(cmd));
+            if (paused) {
+                resume_print();
+            } else {
+                pause_print();
+            }
         }
     });
 
     // Cancel a currently running print. The specific gcode executed
     // is configured in printer.cfg.
     $("#btncancelprint").click(() =>{
-        var sendtype = $('input[name=test_type]:checked').val();
-        if (sendtype == 'http') {
-            var url = "/printer/print/cancel";
+        if (api_type == 'http') {
+            let url = "/printer/print/cancel";
             $.post(url, (resp, status) => {
                 console.log(resp);
                 return false;
             });
         } else {
-            ws.send(JSON.stringify({cancel_print: ""}));
+            cancel_print();
         }
+    });
+
+    $('#btngetlog').click(() => {
+        if (api_type == 'http') {
+            let url = "http://" + location.host + "/printer/log";
+            $('#hidden_link').attr('href', url);
+            $('#hidden_link')[0].click();
+        } else {
+            console.log("Get Log not supported over websocket")
+        }
+    });
+
+    $('#btnrestart').click(() => {
+        if (api_type == 'http') {
+            let url = "/printer/restart";
+            $.post(url, (resp, status) => {
+                console.log(resp);
+                return false;
+            });
+        } else {
+            restart();
+        }
+    });
+
+    $('#btnfirmwarerestart').click(() => {
+        if (api_type == 'http') {
+            let url = "/printer/firmware_restart";
+            $.post(url, (resp, status) => {
+                console.log(resp);
+                return false;
+            });
+        } else {
+            firmware_restart();
+        }
+    });
+
+    // Subscription Request
+    $('#btnsubscribe').click(() => {
+        if (api_type == 'http') {
+            // Endpoint is identical to the "get_status" request, however it adds
+            // "text/event-stream" to the Accept header
+            const suburl = "/printer/objects?gcode=gcode_position,speed,speed_factor,extrude_factor" +
+                    "&toolhead&virtual_sdcard&heater_bed&extruder=temperature,target&fan";
+            $.get({
+                url: suburl,
+                headers: {
+                Accept: "text/event-stream"
+                },
+                success: (data, status) => {
+                    console.log(data);
+                }
+            });
+        } else {
+            const sub = {
+                gcode: ["gcode_position", "speed", "speed_factor", "extrude_factor"],
+                toolhead: [],
+                virtual_sdcard: [],
+                heater_bed: [],
+                extruder: ["temperature", "target"],
+                fan: []};
+            add_subscription(sub);
+        }
+    });
+
+    // Get subscription info, adds "text/event-stream" header
+    $('#btngetsub').click(() => {
+        if (api_type == 'http') {
+            // Endpoint is identical to the "get_object_info" request, however it adds
+            // "text/event-stream" to the Accept header
+            $.get({
+                url: "/printer/objects",
+                headers: {
+                Accept: "text/event-stream"
+                },
+                success: (resp, status) => {
+                    console.log(resp);
+                }
+            });
+        } else {
+            get_subscribed();
+        }
+    });
+
+    $('#btnsendbatch').click(() => {
+        let default_gcs = "M118 This works,RESPOND TYPE=invalid,M118 Execs Despite an Error";
+        let result = window.prompt("Enter a set of comma separated gcodes:", default_gcs);
+        if (result == null || result == "") {
+            console.log("Batch GCode Send Cancelled");
+            return;
+        }
+        let gcodes = result.trim().split(',');
+        send_gcode_batch(gcodes);
+    });
+
+    $('#btnsendmacro').click(() => {
+        let default_gcs =  "M118 This works,RESPOND TYPE=invalid,M118 Should Not Exec";
+        let result = window.prompt("Enter a set of comma separated gcodes:", default_gcs);
+        if (result == null || result == "") {
+            console.log("Gcode Macro Cancelled");
+            return;
+        }
+        let gcodes = result.trim().split(',');
+        send_gcode_macro(gcodes);
     });
 };

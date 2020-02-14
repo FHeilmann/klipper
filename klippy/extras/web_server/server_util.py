@@ -47,3 +47,52 @@ def byteify(data, ignore_dicts=False):
 def json_loads_byteified(data):
     return byteify(
         json.loads(data, object_hook=byteify), True)
+
+# Decorators for identifying routes
+def _route(route, **kwargs):
+    def decorator(func):
+        if hasattr(func, 'route_dict'):
+            func.route_dict[route] = kwargs
+        else:
+            func.route_dict = {route: kwargs}
+        return func
+    return decorator
+
+def _get(route, **kwargs):
+    def decorator(func):
+        kwargs['method'] = 'GET'
+        if hasattr(func, 'route_dict'):
+            func.route_dict[route] = kwargs
+        else:
+            func.route_dict = {route: kwargs}
+        return func
+    return decorator
+
+def _post(route, **kwargs):
+    def decorator(func):
+        kwargs['method'] = 'POST'
+        if hasattr(func, 'route_dict'):
+            func.route_dict[route] = kwargs
+        else:
+            func.route_dict = {route: kwargs}
+        return func
+    return decorator
+
+def _delete(route, **kwargs):
+    def decorator(func):
+        kwargs['method'] = 'DELETE'
+        if hasattr(func, 'route_dict'):
+            func.route_dict[route] = kwargs
+        else:
+            func.route_dict = {route: kwargs}
+        return func
+    return decorator
+
+def endpoint():
+    pass
+
+
+endpoint.route = _route
+endpoint.get = _get
+endpoint.post = _post
+endpoint.delete = _delete

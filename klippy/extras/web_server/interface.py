@@ -52,6 +52,15 @@ class KlippyServerInterface:
         self.printer.register_event_handler(
             "idle_timeout:printing", lambda e, s=self:
             s._handle_printer_state("printing"))
+        self.printer.register_event_handler(
+            "pause_resume:paused", lambda s=self:
+            s._handle_paused_state("paused"))
+        self.printer.register_event_handler(
+            "pause_resume:resumed", lambda s=self:
+            s._handle_paused_state("resumed"))
+        self.printer.register_event_handler(
+            "pause_resume:cleared", lambda s=self:
+            s._handle_paused_state("cleared"))
 
         self.request_callbacks = {
             'get_klippy_info': self._get_klippy_info,
@@ -60,11 +69,12 @@ class KlippyServerInterface:
             'get_object_info': self._get_object_info,
             'add_subscription': self._add_subscription,
             'get_subscribed': self._get_subscribed_objs,
-            'query_endstops': self._query_endstops,
             'start_print': self._start_print,
             'cancel_print': self._cancel_print,
             'pause_print': self._pause_print,
-            'resume_print': self._resume_print
+            'resume_print': self._resume_print,
+            'restart': self._host_restart,
+            'firmware_restart': self._firmware_restart
         }
 
     def _init_server(self, config):
@@ -78,6 +88,21 @@ class KlippyServerInterface:
         default_path = os.path.join(os.path.dirname(__file__), "www/")
         server_config['web_path'] = os.path.normpath(os.path.expanduser(
             config.get('web_path', default_path)))
+
+        # Get timeouts
+        server_config['base_timeout'] = config.getfloat('request_timeout', 5.)
+        server_config['gcode_timeout'] = config.getfloat('gcode_timeout', 60.)
+        long_gcs = config.get('long_running_gcodes', None)
+        if long_gcs is not None:
+            try:
+                long_gcs = long_gcs.split('/n')
+                long_gcs = [cmd.split(',', 1) for cmd in long_gcs
+                            if cmd.strip()]
+                long_gcs = {k.strip().upper(): float(v.strip()) for (k, v)
+                            in long_gcs if k.strip()}
+            except Exception:
+                raise config.error("Error parsing long_running_gcodes")
+            server_config['long_running_gcodes'] = long_gcs
 
         # Get Virtual Sdcard Path
         if not config.has_section('virtual_sdcard'):
@@ -134,19 +159,31 @@ class KlippyServerInterface:
         self.wsgi_manager.shutdown()
 
     def _handle_printer_state(self, state):
-        self.send_server_cmd('event', 'printer_state_event', state)
+        self.send_server_cmd('notification', 'printer_state_changed', state)
 
     def _handle_klippy_state(self, state):
-        self.send_server_cmd('event', 'klippy_state_event', state)
+        self.send_server_cmd('notification', 'klippy_state_changed', state)
 
-    def _handle_gcode_response(self, data):
-        self.send_server_cmd('event', 'gcode_response', data)
+    def _handle_paused_state(self, state):
+        self.send_server_cmd('notification', 'paused_state_changed', state)
 
-    def _get_klippy_info(self, data=''):
+    def _handle_gcode_response(self, gc_response):
+        self.send_server_cmd('notification', 'gcode_response', gc_response)
+
+    def _get_klippy_info(self):
         version = self.printer.get_start_args().get('software_version')
         hostname = socket.gethostname()
         return {'hostname': hostname, 'version': version,
                 "is_ready": self.ready}
+
+    def register_url(self, endpoint, callback):
+        #  At the moment modules may only register "GET" requests
+        request_name = "get_" + endpoint
+        if request_name in self.request_callbacks:
+            # TODO:  This should really raise a config error
+            raise Exception
+        self.request_callbacks[request_name] = callback
+        self.send_server_cmd('register_ep', request_name, endpoint)
 
     def handle_status_request(self, objects):
         if self.ready:
@@ -175,69 +212,76 @@ class KlippyServerInterface:
             self.gcode.run_script(gc)
         except Exception as e:
             logging.exception("[WEBSERVER]: Script running error: %s" % gc)
-            return WSGIManager.error('cmd', e.message, 400)
+            return WSGIManager.error(cmd, e.message, 400)
         return "ok"
 
-    def _get_object_info(self, data=""):
+    def _get_object_info(self):
         return dict(self.status_objs)
 
-    def _get_subscribed_objs(self, data=""):
+    def _get_subscribed_objs(self):
         return self.sub_hdlr.get_sub_info()
 
-    def _query_endstops(self, data=""):
-        query_endstops = self.printer.lookup_object('query_endstops')
-        return query_endstops.get_endstop_state()
-
-    def _get_object_status(self, data):
-        if type(data) != dict:
+    def _get_object_status(self, printer_objects):
+        if type(printer_objects) != dict:
             return WSGIManager.error(
                 "get_status", "Parameter must be a dict type")
-        return self.handle_status_request(data)
+        return self.handle_status_request(printer_objects)
 
-    def _add_subscription(self, data):
-        if type(data) != dict:
+    def _add_subscription(self, printer_objects):
+        if type(printer_objects) != dict:
             return WSGIManager.error(
                 "add_subscription", "Parameter must be a dict type")
-        self.sub_hdlr.add_subscripton(data)
+        self.sub_hdlr.add_subscripton(printer_objects)
         return "ok"
 
-    def _start_print(self, data):
+    def _start_print(self, file_name):
         # prepend a '/', this assures that the gcode parser
         # will correctly accept the M23 command.
-        if data[0] != '/':
-            data = '/' + data
-        start_cmd = "M23 " + data + "\nM24"
+        if file_name[0] != '/':
+            file_name = '/' + file_name
+        start_cmd = "M23 " + file_name + "\nM24"
         return self._run_gcode(start_cmd, 'start_print')
 
-    def _cancel_print(self, data):
+    def _cancel_print(self):
         return self._run_gcode(self.cancel_gcode.render(), 'cancel_print')
 
-    def _pause_print(self, data):
+    def _pause_print(self):
         if self.pause_resume.get_status(0)['is_paused']:
             return WSGIManager.error(
                 'pause_print', "Print Already Paused")
         return self._run_gcode(self.pause_gcode.render(), 'pause_print')
 
-    def _resume_print(self, data):
+    def _resume_print(self):
         if not self.pause_resume.get_status(0)['is_paused']:
             return WSGIManager.error(
                 'resume_print', "Print Not Paused")
         return self._run_gcode(self.resume_gcode.render(), 'resume_print')
 
-    def run_async_commmand(self, cmd, *args):
-        self.reactor.register_async_callback(
-            lambda e, s=self: s.exec_server_command(cmd, *args))
+    def _host_restart(self):
+        self.printer.request_exit('restart')
+        return "ok"
 
-    def exec_server_command(self, cmd, uid, data):
+    def _firmware_restart(self):
+        self.printer.request_exit('firmware_restart')
+        return "ok"
+
+    def run_async_commmand(self, cmd, uid, *args):
+        self.reactor.register_async_callback(
+            lambda e, s=self: s.exec_server_command(cmd, uid, *args))
+
+    def exec_server_command(self, cmd, uid, *args):
         func = self.request_callbacks.get(cmd, None)
         if func is not None:
-            resp = func(data)
+            try:
+                result = func(*args)
+            except Exception as e:
+                result = WSGIManager.error(cmd, str(e))
         else:
-            resp = WSGIManager.error(cmd, "No handler for command")
+            result = WSGIManager.error(cmd, "No handler for command")
             logging.info(
                 "[WEBSERVER]: KlippyServerInterface: No callback for "
                 "request %s" % (cmd))
-        self.send_server_cmd('response', uid, cmd, resp)
+        self.send_server_cmd('response', uid, cmd, result)
 
     cmd_GET_API_KEY_help = "Print webserver API key to terminal"
     def cmd_GET_API_KEY(self, params):

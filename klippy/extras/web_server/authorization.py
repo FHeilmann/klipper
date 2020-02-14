@@ -3,9 +3,7 @@ import uuid
 import logging
 import eventlet
 from eventlet.green import os, time
-from datetime import datetime, timedelta
 
-bottle = eventlet.import_patched('bottle')
 TOKEN_TIMEOUT = 5
 CONNECTION_TIMEOUT = 3600
 PRUNE_CHECK_TIME = 300
@@ -35,14 +33,11 @@ class ApiAuth:
     name = "api_auth"
     api = 2
 
-    _current_instance = None
-
-    @staticmethod
-    def get_manager():
-        return ApiAuth._current_instance
-
-    def __init__(self):
-        pass
+    def __init__(self, patched_bottle):
+        self.bottle = patched_bottle
+        self.request = self.bottle.request
+        self.response = self.bottle.response
+        self.abort = self.bottle.abort
 
     def setup(self, app):
         config = app.config
@@ -55,17 +50,15 @@ class ApiAuth:
         self.enable_cors = config.get("api_auth.enable_cors", False)
         self.api_key = _read_api_key(self.api_key_path)
         self.access_tokens = {}
-        ApiAuth._current_instance = self
         self.prune_gthread = eventlet.spawn(self._prune_conn_handler)
         logging.info(
             "[WEBSERVER]: Authorization Plugin Initialized\n"
             "API Key Path: %s\n"
-            "API Key: %s\n"
             "Auth Enabled: %s\n"
             "Cors Enabled: %s\n"
             "Trusted IPs:\n%s\n"
             "Trusted IP Ranges:\n%s" %
-            (self.api_key_path, self.api_key, self.auth_enabled,
+            (self.api_key_path, self.auth_enabled,
              self.enable_cors, ('\n').join(self.trusted_ips),
              ('\n').join(self.trusted_ranges)))
 
@@ -102,7 +95,7 @@ class ApiAuth:
         return token
 
     def _check_access_token(self):
-        token = bottle.request.params.get('token')
+        token = self.request.params.get('token')
         if token in self.access_tokens:
             expire_thread = self.access_tokens.pop(token)
             expire_thread.kill()
@@ -111,7 +104,7 @@ class ApiAuth:
             return False
 
     def _check_trusted_ips(self):
-        ip = bottle.request.environ.get('REMOTE_ADDR')
+        ip = self.request.environ.get('REMOTE_ADDR')
         if ip is not None:
             if ip in self.trusted_connections:
                 self.trusted_connections[ip] = time.time()
@@ -131,7 +124,7 @@ class ApiAuth:
             return True
 
         # Check API Key Header
-        key = bottle.request.headers.get("X-Api-Key")
+        key = self.request.headers.get("X-Api-Key")
         if key and key == self.api_key:
             return True
 
@@ -145,25 +138,25 @@ class ApiAuth:
 
         def auth_wrapper(*args, **kwargs):
             # Check if this is a forwarded proxy request
-            real_ip = bottle.request.headers.get("X-Real-IP")
+            real_ip = self.request.headers.get("X-Real-IP")
             if real_ip:
-                bottle.request.environ['REMOTE_ADDR'] = real_ip
+                self.request.environ['REMOTE_ADDR'] = real_ip
 
             if self.auth_enabled and not allow_unauthorized:
                 # Auth required, check before continuing
                 if not self._check_authorized():
-                    bottle.abort(401, "Unauthorized")
+                    self.abort(401, "Unauthorized")
 
             if self.enable_cors:
                 # set CORS headers
-                bottle.response.headers['Access-Control-Allow-Origin'] = '*'
-                bottle.response.headers['Access-Control-Allow-Methods'] = \
+                self.response.headers['Access-Control-Allow-Origin'] = '*'
+                self.response.headers['Access-Control-Allow-Methods'] = \
                     'GET, POST, PUT, OPTIONS'
-                bottle.response.headers['Access-Control-Allow-Headers'] = \
+                self.response.headers['Access-Control-Allow-Headers'] = \
                     'Origin, Accept, Content-Type, X-Requested-With, ' \
                     'X-CSRF-Token'
 
-                if bottle.request.method != 'OPTIONS':
+                if self.request.method != 'OPTIONS':
                     # OPTIONS does not require a response
                     return callback(*args, **kwargs)
             else:

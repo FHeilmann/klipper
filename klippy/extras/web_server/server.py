@@ -12,19 +12,23 @@ from eventlet import wsgi
 from eventlet.green import select, socket, os, time
 from ws_handler import WebsocketHandler
 from server_util import DEBUG, ServerError, json_encode
-from authorization import ApiAuth
-from api import app
+from api import RestAPI
 
 class WSGIManager:
     error = ServerError
     def __init__(self, request_callback, server_config):
-        self.send_klippy_cmd = request_callback
+        self.klippy_request_callback = request_callback
         self.hostname = server_config.get('host', '0.0.0.0')
         self.port = server_config.get('port', 7125)
-        self.server_running = False
-        self.api_key = None
-        self.www_path = server_config.get('web_path')
         self.sd_path = server_config.get('sd_path')
+
+        # Setup command timeouts
+        self.base_timeout = server_config.get('base_timeout', 5.)
+        self.gcode_timeout = server_config.get('gcode_timeout', 60.)
+        self.long_running_gcs = server_config.get('long_running_gcodes', {})
+
+        self.server_running = False
+        self.rest_api = None
         self.ws_handler = WebsocketHandler(self)
         self.command_queue = Queue.Queue()
         self._resume_fd, self._notify_fd = os.pipe()
@@ -35,7 +39,8 @@ class WSGIManager:
         self.pending_events = {}
         self.command_callbacks = {
             'response': self._process_klippy_response,
-            'event': self._process_event,
+            'notification': self._process_notification,
+            'register_ep': self._register_endpoint,
             'kill_server': self._kill_server}
         self.server_thread = threading.Thread(
             target=self.start, args=[server_config])
@@ -43,7 +48,7 @@ class WSGIManager:
 
     def start(self, server_config):
         self.server_running = True
-        self._init_authorization(server_config)
+        self.rest_api = RestAPI(self, server_config)
         self.kreq_gthrd = eventlet.spawn(self._check_klippy_request)
         self.wsgi_gthrd = eventlet.spawn(self._wsgi_gthread_handler)
         try:
@@ -60,16 +65,6 @@ class WSGIManager:
                 "forceably terminating")
             self.kreq_gthrd.kill()
 
-    def _init_authorization(self, server_config):
-        app.config.update({
-            'api_auth.api_key_path': server_config.get('api_key_path'),
-            'api_auth.enabled': server_config.get('require_auth'),
-            'api_auth.trusted_ips': server_config.get('trusted_ips'),
-            'api_auth.trusted_ranges': server_config.get('trusted_ranges'),
-            'api_auth.enable_cors': server_config.get('enable_cors')})
-        api_auth = app.install(ApiAuth())
-        self.api_key = api_auth.get_api_key()
-
     def _wsgi_gthread_handler(self):
         self.listener = eventlet.listen((self.hostname, self.port))
         self.listener.setsockopt(
@@ -77,8 +72,7 @@ class WSGIManager:
         logging.info(
             "[WEBSERVER]: Starting WSGI Server on (%s, %d)" %
             (self.hostname, self.port))
-        wsgi.server(self.listener, app, environ={
-            'WSGI_MGR': self, 'WS_HDLR': self.ws_handler}, debug=DEBUG)
+        wsgi.server(self.listener, self.rest_api.get_app(), debug=DEBUG)
 
     def _check_klippy_request(self):
         # The "green" eventlet queue is not thread safe, so
@@ -100,6 +94,20 @@ class WSGIManager:
                 if cb is not None:
                     cb(*args)
 
+    def forward_klippy_request(self, request, uid, *args):
+        timeout = self.base_timeout
+        if request == "run_gcode":
+            timeout = self._get_gcode_timeout(args[0])
+        self.klippy_request_callback(request, uid, *args)
+        return timeout
+
+    def _get_gcode_timeout(self, gc):
+        base_gc = gc.strip().split()[0].upper()
+        return self.long_running_gcs.get(base_gc, self.gcode_timeout)
+
+    def is_printing(self):
+        return self.klippy_printing
+
     def create_event(self):
         evt = eventlet.Event()
         uid = id(evt)
@@ -113,9 +121,10 @@ class WSGIManager:
         filelist = self.get_file_list()
         if isinstance(filelist, ServerError):
             filelist = []
-        data = {'filename': filename, 'action': action,
-                'filelist': filelist}
-        eventlet.spawn_n(self._process_event, 'file_changed_event', data)
+        result = {'filename': filename, 'action': action,
+                  'filelist': filelist}
+        eventlet.spawn_n(
+            self._process_notification, 'filelist_changed', result)
 
     def get_file_list(self):
         filelist = []
@@ -133,30 +142,39 @@ class WSGIManager:
             return ServerError('get_file_list', "Unable to create file list")
         return sorted(filelist, key=lambda val: val['filename'].lower())
 
-    def _process_klippy_response(self, uid, command, data):
-        resp = {'command': command, 'data': data}
+    def _process_klippy_response(self, uid, command, result):
+        resp = {'command': command, 'result': result}
         evt = self.remove_event(uid)
         if evt is not None:
             evt.send(resp)
 
-    def _process_event(self, event, data):
-        if event == 'printer_state_event':
-            self.klippy_printing = data.lower() == "printing"
-        resp = json_encode({'command': event, 'data': data})
+    def _process_notification(self, name, state):
+        if name == 'printer_state_changed':
+            self.klippy_printing = (state.lower() == "printing")
+        # Send Event Over Websocket in JSON-RPC 2.0 format.
+        resp = json_encode({
+            'jsonrpc': "2.0",
+            'method': "notify_" + name,
+            'params': [state]})
         self.ws_handler.send_all_websockets(resp)
 
-    def _kill_server(self, data=None):
+    def _register_endpoint(self, request_name, endpoint):
+        self.rest_api.register_route(request_name, endpoint)
+        self.ws_handler.register_rpc_method(request_name)
+
+    def _kill_server(self, reason=None):
         logging.info(
             "[WEBSERVER]: Shutting Down Webserver at request from Klippy")
         if self.server_running:
             self.server_running = False
+            reason = reason or "shutdown"
             for evt in self.pending_events.values():
-                evt.send({"command": "shutdown", "data": "shutdown"})
+                evt.send({"command": "shutdown", "result": reason})
             self.pending_events = {}
             self.ws_handler.close()
             self.listener.close()
             self.wsgi_gthrd.kill(eventlet.StopServe)
-            app.close()
+            self.rest_api.close()
 
     def run_async_server_cmd(self, cmd, *args):
         self.command_queue.put_nowait((cmd, args))
@@ -166,7 +184,7 @@ class WSGIManager:
             pass
 
     def get_api_key(self):
-        return self.api_key
+        return self.rest_api.get_key()
 
     def shutdown(self):
         if self.server_thread.is_alive():

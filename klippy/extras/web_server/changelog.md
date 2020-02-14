@@ -1,0 +1,11 @@
+### Version .01-alpha - 02/14/2020
+- The api.py module has been refactored to contain the bottle application and all routes within a class.  Bottle is now imported and patched dynamically within this class's constructor.  This resolves an issue where the "request" context was lost when the Klippy host restarts.
+- Change the Websocket API to use the JSON-RPC 2.0 protocol.  See the test client (main.js and json-rpc.js) for an example client side implementation.
+- Remove file transfer support from the websocket.  Use the HTTP for all file transfer requests.
+- Add support for Klippy Host modules to register their own urls.  Query_endstops.py has been updated with an example.  As a result of this change, the endpoint for endstop query has been changed to `/printer/extras/endstops`.
+- Add support for "paused", "resumed", and "cleared" pause events.
+- Add routes for downloading klippy.log, restart, and firmware_restart.
+- Remove support for trailing slashes in HTTP API routes.
+- Support "start print after upload" requests
+- Add support for user configured request timeouts
+- The test client has been updated to work with the new changes

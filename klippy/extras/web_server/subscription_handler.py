@@ -57,7 +57,7 @@ class SubscriptionHandler:
 
         if current_subs:
             status = self.ksi.handle_status_request(current_subs)
-            self.ksi.send_server_cmd('event', 'status_update_event', status)
+            self.ksi.send_server_cmd('notification', 'status_update', status)
 
         return eventtime + self.tick_time
 

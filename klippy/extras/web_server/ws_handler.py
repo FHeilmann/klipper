@@ -7,80 +7,136 @@
 import logging
 import eventlet
 from eventlet import websocket
-from eventlet.green import os, socket
+from eventlet.green import socket
 from eventlet.semaphore import Semaphore
 from server_util import ServerError, json_encode, json_loads_byteified
 
-BUFFER_SIZE = 65536
+# Dictionary containing APIs that must query the host.  The value is the
+# argument count.  As of now client requests take no more than one
+# argument
+KLIPPY_API_REQUESTS = {
+    'get_klippy_info': 0, 'run_gcode': 1, 'get_status': 1,
+    'get_object_info': 0, 'add_subscription': 1, 'get_subscribed': 0,
+    'start_print': 1, 'cancel_print': 0, 'pause_print': 0,
+    'resume_print': 0, 'restart': 0, 'firmware_restart': 0
+}
 
-class FileUpload:
-    def __init__(self, sd_path, data, ws_id):
-        self.file_name = self.get_param('filename', data)
-        self.file_size = self.get_param('size', data)
-        self.total_chunks = self.get_param('chunks', data)
-        self.chunk_size = self.get_param('chunk_size', data)
-        self.current_chunk = 0
-        self.name = os.path.join(sd_path, self.file_name)
-        self.ws_id = ws_id
+class JsonRPC:
+    def __init__(self):
+        self.methods = {}
+
+    def register_method(self, name, method):
+        self.methods[name] = method
+
+    def dispatch(self, data):
+        response = None
         try:
-            self.filep = open(self.name, 'wb')
+            request = json_loads_byteified(data)
         except Exception:
-            raise ServerError(
-                'upload_file', "Unable to open file for writing '%s'"
-                % (self.name))
+            msg = "Websocket data not json: %s" % (str(data))
+            logging.exception("[WEBSERVER]: " + msg)
+            response = self.build_error(-32700, "Parse error")
+            return json_encode(response)
+        if isinstance(request, list):
+            response = []
+            for req in request:
+                resp = self.process_request(req)
+                if resp is not None:
+                    response.append(resp)
+            if not response:
+                response = None
+        else:
+            response = self.process_request(request)
+        if response is not None:
+            response = json_encode(response)
+        return response
 
-    def get_param(self, name, data):
-        param = data.get(name)
-        if param is None:
-            raise ServerError('upload_file', "Upload Missing '%s'" % (name))
-        return param
-
-    def write_file(self, data):
-        try:
-            while data:
-                self.filep.write(data[:BUFFER_SIZE])
-                data = data[BUFFER_SIZE:]
-        except Exception:
-            self.filep.close()
-            raise ServerError('upload_file', "Error Writing File")
-        self.current_chunk += 1
-        if self.current_chunk >= self.total_chunks:
-            self.filep.close()
-            size = os.path.getsize(self.name)
-            if size != self.file_size:
-                raise ServerError(
-                    'upload_file', "File Size mismatch,"
-                    "expected: %d | actual: %d" %
-                    (self.file_size, size))
+    def process_request(self, request):
+        req_id = request.get('id', None)
+        rpc_version = request.get('jsonrpc', "")
+        method_name = request.get('method', None)
+        if rpc_version != "2.0" or not isinstance(method_name, str):
+            return self.build_error(-32600, "Invalid Request", req_id)
+        method = self.methods.get(method_name, None)
+        if method is None:
+            return self.build_error(-32601, "Method not found", req_id)
+        if 'params' in request:
+            params = request['params']
+            if isinstance(params, list):
+                response = self.execute_method(method, req_id, *params)
+            elif isinstance(params, dict):
+                response = self.execute_method(method, req_id, **params)
             else:
-                logging.info(
-                    "[WEBSERVER]: Uploaded file from websocket: %s Size: %d"
-                    % (self.name, self.file_size))
-            return True
-        return False
+                return self.build_error(-32600, "Invalid Request", req_id)
+        else:
+            response = self.execute_method(method, req_id)
+        return response
 
-# XXX - Add ability to response to a PING command.  Also add ability to handle
-# unique identifiers recieved from the websocket (so it can guarantee responses
-# match requests).  Also add "command_type" to the dictionary.  The types can
-# be "event", "response", "error".  Also, rather than send back a "data"
-# attribute, it may be better to just put the data in the top level dictionary.
-# The API documentation can explain how each response should be formatted.
-# This would affect the REST API as well.
+    def execute_method(self, method, req_id, *args, **kwargs):
+        try:
+            result = method(*args, **kwargs)
+        except TypeError as e:
+            return self.build_error(-32603, "Invalid params", req_id)
+        except Exception as e:
+            # TODO: We may need to process different
+            # Exception types so we return the correct
+            # error
+            return self.build_error(-31000, str(e), req_id)
+        if isinstance(result, ServerError):
+            return self.build_error(result.status_code, result.message, req_id)
+        elif req_id is None:
+            return None
+        else:
+            return self.build_result(result, req_id)
+
+    def build_result(self, result, req_id):
+        return {
+            'jsonrpc': "2.0",
+            'result': result,
+            'id': req_id
+        }
+
+    def build_error(self, code, msg, req_id=None):
+        return {
+            'jsonrpc': "2.0",
+            'error': {'code': code, 'message': msg},
+            'id': req_id
+        }
+
 class WebsocketHandler:
     def __init__(self, wsgi_mgr):
         self.wsgi_mgr = wsgi_mgr
-        self.send_klippy_cmd = wsgi_mgr.send_klippy_cmd
         self.sd_path = wsgi_mgr.sd_path
         self.websockets = {}
         self.ws_lock = Semaphore()
-        self.pending_uploads = {}
-        self.server_commands = {
-            'get_file_list': self._get_file_list,
-            'download_file': self._process_download,
-            'upload_file': self._prepare_upload,
-            'delete_file': self._process_delete
-        }
+        self.rpc = JsonRPC()
+        self._register_api_methods()
         self.__call__ = websocket.WebSocketWSGI(self._handle_websocket)
+
+    def register_rpc_method(self, request_name):
+        # Only "GET" methods are allowed, with zero parameters
+        func = self._get_method_callback(request_name, 0)
+        self.rpc.register_method(request_name, func)
+
+    def _register_api_methods(self):
+        # register local methods
+        self.rpc.register_method('ping', lambda: "pong")
+        self.rpc.register_method('get_file_list', self.wsgi_mgr.get_file_list)
+
+        # Register Klippy methods.  We cannot register lambdas or call
+        # _process_websocket_request directly because we must strictly
+        # enforce the argument count for JSON-RPC to detect a parameter
+        # error
+        for request, arg_count in KLIPPY_API_REQUESTS.items():
+            func = self._get_method_callback(request, arg_count)
+            self.rpc.register_method(request, func)
+
+    def _get_method_callback(self, request, arg_count):
+        def func(*args):
+            if len(args) != arg_count:
+                raise TypeError("Invalid Argument Count")
+            return self._process_websocket_request(request, *args)
+        return func
 
     def _handle_websocket(self, ws):
         ws_id = id(ws)
@@ -90,160 +146,34 @@ class WebsocketHandler:
                 data = ws.wait()
                 if data is None:
                     break
-                if ws_id in self.pending_uploads:
-                    fupload = self.pending_uploads[ws_id]
-                    self._process_upload(data, fupload)
-                else:
-                    self.process_command(data, ws_id)
+                eventlet.spawn_n(self._handle_request, ws, data)
         except Exception:
             # Don't log the exception we know will be raised when the server
             # closes the socket on shutdown
             if self.wsgi_mgr.server_running:
-                logging.exception("[WEBSERVER]: Error Processing websocket data")
+                logging.exception(
+                    "[WEBSERVER]: Error Processing websocket data")
         finally:
             self.remove_websocket(ws, ws_id)
 
-    def process_command(self, data, ws_id):
+    def _handle_request(self, ws, request):
         try:
-            data = json_loads_byteified(data)
-        except ValueError:
-            msg = "Websocket data not json: %s" % (str(data))
-            logging.exception("[WEBSERVER]: " + msg)
-            self.send(self._build_error("unknown", msg), ws_id)
-            return
-        # Add websocket ID to commands
-        for cmd, payload in data.iteritems():
-            if cmd in self.server_commands:
-                self.server_commands[cmd](payload, ws_id)
-            else:
-                self._send_klippy_request(cmd, payload, ws_id)
+            response = self.rpc.dispatch(request)
+            if response is not None:
+                ws.send(response)
+        except Exception:
+            logging.exception("[WEBSERVER]: Websocket Command Error")
 
-    def _build_error(self, cmd, msg):
-        err = ServerError(cmd, msg)
-        return self._build_response('server_error', err)
-
-    def _build_response(self, cmd, data):
-        return json_encode({'command': cmd, 'data': data})
-
-    def _get_file_list(self, data, ws_id):
-        filelist = self.wsgi_mgr.get_file_list()
-        if isinstance(filelist, ServerError):
-            resp = self._build_response('server_error', filelist)
-        else:
-            resp = self._build_response('get_file_list', filelist)
-        self.send(resp, ws_id)
-
-    def _process_download(self, data, ws_id):
-        err = None
-        if self.wsgi_mgr.klippy_printing:
-            err = self._build_error(
-                'download_file', "Cannot download while Klippy is Printing")
-        else:
-            filename = data.get('filename', "")
-            fullname = os.path.join(self.sd_path, filename)
-            if os.path.isfile(fullname):
-                # Remove the current websocket from the websockets dict.
-                # We do not want klippy events sent between download packets
-                with self.ws_lock:
-                    ws = self.websockets.pop(ws_id)
-                try:
-                    size = os.path.getsize(fullname)
-                    chunks = abs(-size // BUFFER_SIZE)
-                    finfo = self._build_response(
-                        'download_file',
-                        {'filename': filename,
-                            'size': size,
-                            'chunks': chunks,
-                            'chunk_size': BUFFER_SIZE})
-                    with open(fullname, 'rb') as filep:
-                        ws.send(finfo)
-                        while chunks:
-                            ws.send(filep.read(BUFFER_SIZE))
-                            chunks -= 1
-                except Exception:
-                    err = self._build_error(
-                        'download_file', "Unable to send file <%s>" % (data))
-                finally:
-                    # add the websocket back to the list
-                    with self.ws_lock:
-                        self.websockets[ws_id] = ws
-            else:
-                err = self._build_error(
-                    'download_file', "File <%s> does not exist" % (data))
-        resp = err or self._build_response('download_file', "complete")
-        self.send(resp, ws_id)
-
-    def _prepare_upload(self, data, ws_id):
-        # XXX - Should launch a greenthead with a timeout that cancels
-        # the upload.  Timeout should be calculated by Chunk Size
-        err = None
-        if self.wsgi_mgr.klippy_printing:
-            err = self._build_error(
-                'upload_file', "Cannot upload while Klippy is Printing")
-        else:
-            try:
-                self.pending_uploads[ws_id] = FileUpload(
-                    self.sd_path, data, ws_id)
-            except ServerError as e:
-                err = self._build_response('server_error', e)
-        resp = err or self._build_response(
-            'upload_file', {'state': "ready", "chunk": 0})
-        self.send(resp, ws_id)
-
-    def _process_upload(self, data, fupload):
-        err = None
-        try:
-            done = fupload.write_file(data)
-        except ServerError as e:
-            done = True
-            err = self._build_response('server_error', e)
-        if done:
-            del self.pending_uploads[fupload.ws_id]
-            self.send(err or self._build_response(
-                'upload_file', {'state': "complete"}), fupload.ws_id)
-            if err is None:
-                # Notify all connected clients that the filelist has changed
-                self.wsgi_mgr.notify_filelist_changed(
-                    fupload.file_name, 'added')
-        else:
-            return_data = {'state': "ready", "chunk": fupload.current_chunk}
-            resp = self._build_response('upload_file', return_data)
-            self.send(resp, fupload.ws_id)
-
-    def _process_delete(self, data, ws_id):
-        err = None
-        if self.wsgi_mgr.klippy_printing:
-            err = self._build_error(
-                'delete_file', "Cannot delete while Klippy is Printing")
-        else:
-            filename = data.get('filename', "")
-            filename = os.path.join(self.sd_path, filename)
-            if os.path.isfile(filename):
-                try:
-                    os.remove(filename)
-                except OSError:
-                    err = self._build_error(
-                        'delete_file', "Unable to Delete file <%s>" % (data))
-            else:
-                err = self._build_error(
-                    'delete_file', "File <%s> does not exist" % (data))
-        resp = err or self._build_response('delete_file', "ok")
-        self.send(resp, ws_id)
-        if err is None:
-            self.wsgi_mgr.notify_filelist_changed(filename, 'removed')
-
-    def _send_klippy_request(self, request, data, ws_id):
+    def _process_websocket_request(self, request, *args):
         evt, uid = self.wsgi_mgr.create_event()
-        self.send_klippy_cmd(request, uid, data)
-        result = evt.wait(timeout=60.)
-        if result is None:
-            resp = self._build_error(request, "Klippy Request Timed Out")
+        timeout = self.wsgi_mgr.forward_klippy_request(request, uid, *args)
+        response = evt.wait(timeout=timeout)
+        if response is None:
+            self.wsgi_mgr.remove_event(uid)
+            result = ServerError(request, "Klippy Request Timed Out")
         else:
-            if isinstance(result['data'], ServerError):
-                result['command'] = "server_error"
-            resp = json_encode(result)
-        self.wsgi_mgr.remove_event(uid)
-        self.send(resp, ws_id)
+            result = response['result']
+        return result
 
     def has_websocket(self, ws_id):
         return ws_id in self.websockets
