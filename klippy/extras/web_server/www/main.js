@@ -736,9 +736,7 @@ window.onload = () => {
         if (api_type == 'http') {
             let url = paused ? "/printer/print/resume" : "/printer/print/pause";
             $.post(url, (resp, status) => {
-                paused = !paused;
-                let label = paused ? "Resume Print" : "Pause Print";
-                $('#btnpauseresume').text(label);
+                console.log(resp.result);
                 return false;
             });
         } else {
