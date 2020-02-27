@@ -6,7 +6,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import sys, os, optparse, logging, time, threading, collections, importlib
 import util, reactor, queuelogger, msgproto, homing
-import gcode, configfile, pins, mcu, toolhead
+import gcode, configfile, pins, mcu, toolhead, webhooks
 
 message_ready = "Printer is ready"
 
@@ -57,8 +57,18 @@ class Printer:
         self.in_shutdown_state = False
         self.run_result = None
         self.event_handlers = {}
-        gc = gcode.GCodeParser(self, input_fd)
-        self.objects = collections.OrderedDict({'gcode': gc})
+        web_hooks = webhooks.WebHooks()
+        gc = gcode.GCodeParser(self, input_fd, web_hooks)
+        self.objects = collections.OrderedDict(
+            {'gcode': gc, 'webhooks': web_hooks})
+        # Register Printer Endpoints
+        web_hooks.register_endpoint(
+            '/printer/info', self._handle_web_request)
+        web_hooks.register_endpoint(
+            '/printer/restart', self._handle_web_request, methods=['POST'])
+        web_hooks.register_endpoint(
+            '/printer/firmware_restart', self._handle_web_request,
+            methods=['POST'])
     def get_start_args(self):
         return self.start_args
     def get_reactor(self):
@@ -129,8 +139,24 @@ class Printer:
             self.load_object(config, section_config.get_name(), None)
         for m in [toolhead]:
             m.add_printer_objects(config)
+        # Send a post configure event
+        self.send_event("klippy:post_config")
         # Validate that there are no undefined parameters in the config file
         pconfig.check_unused_options(config)
+    def _handle_web_request(self, web_request):
+        path = web_request.get_path()
+        if path == '/printer/info':
+            version = self.start_args['software_version']
+            cpu_info = self.start_args['cpu_info']
+            web_request.send(
+                {'cpu': cpu_info, 'version': version,
+                 'is_ready': self.state_message == message_ready})
+        elif path == '/printer/restart':
+            self.request_exit('restart')
+        elif path == '/printer/firmware_restart':
+            self.request_exit('firmware_restart')
+        else:
+            raise web_request.error("Invalid Web Path '%s'" % path)
     def _connect(self, eventtime):
         try:
             self._read_config()
@@ -273,11 +299,12 @@ def main():
         logging.basicConfig(level=debuglevel)
     logging.info("Starting Klippy...")
     start_args['software_version'] = util.get_git_version()
+    start_args['cpu_info'] = util.get_cpu_info()
     if bglogger is not None:
         versions = "\n".join([
             "Args: %s" % (sys.argv,),
             "Git version: %s" % (repr(start_args['software_version']),),
-            "CPU: %s" % (util.get_cpu_info(),),
+            "CPU: %s" % (start_args['cpu_info'],),
             "Python: %s" % (repr(sys.version),)])
         logging.info(versions)
     elif not options.debugoutput:
