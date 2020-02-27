@@ -6,5 +6,4 @@ cffi==1.12.2
 pyserial==3.4
 greenlet==0.4.15
 Jinja2==2.10.1
-eventlet==0.25.1
-bottle==0.12.17
+tornado==5.1.1
