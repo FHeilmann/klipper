@@ -3,7 +3,7 @@
 # Copyright (C) 2016-2020  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import os, re, logging, collections, shlex
+import os, re, logging, collections, shlex, termios
 import homing
 
 class GCodeCommand:
@@ -378,8 +378,12 @@ class GCodeParser:
         self.printer.send_event("gcode:respond", msg)
         try:
             os.write(self.fd, msg+"\n")
-        except os.error:
-            logging.exception("Write g-code response")
+        except os.error as e:
+            if e.errno == 11:
+                termios.tcflush(self.fd, termios.TCOFLUSH)
+                logging.info("gcode: Write gcode response flushed")
+            else:
+                logging.exception("Write g-code response")
     def respond_info(self, msg, log=True):
         if log:
             logging.info(msg)
