@@ -9,11 +9,10 @@ class QueryEndstops:
         self.printer = config.get_printer()
         self.endstops = []
         self.last_state = {}
-        # Register URL if server is available
-        if config.has_section('web_server'):
-            webserver = self.printer.try_load_module(config, 'web_server')
-            if webserver is not None:
-                webserver.register_url('endstops', self.get_endstop_state)
+        # Register webhook if server is available
+        webhooks = self.printer.lookup_object('webhooks')
+        webhooks.register_endpoint(
+            "/printer/endstops", self._handle_web_request)
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command("QUERY_ENDSTOPS", self.cmd_QUERY_ENDSTOPS,
                                desc=self.cmd_QUERY_ENDSTOPS_help)
@@ -22,12 +21,12 @@ class QueryEndstops:
         self.endstops.append((mcu_endstop, name))
     def get_status(self, eventtime):
         return {'last_query': {name: value for name, value in self.last_state}}
-    def get_endstop_state(self):
+    def _handle_web_request(self, web_request):
         print_time = self.printer.lookup_object('toolhead').get_last_move_time()
         self.last_state = [(name, mcu_endstop.query_endstop(print_time))
                            for mcu_endstop, name in self.endstops]
-        return {name: ["open", "TRIGGERED"][not not t]
-                for name, t in self.last_state}
+        web_request.send({name: ["open", "TRIGGERED"][not not t]
+                          for name, t in self.last_state})
     cmd_QUERY_ENDSTOPS_help = "Report on the status of each endstop"
     def cmd_QUERY_ENDSTOPS(self, gcmd):
         # Query the endstops
