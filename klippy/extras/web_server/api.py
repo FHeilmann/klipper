@@ -1,254 +1,252 @@
-# Klipper Web Server API
+# Klipper Web Server Rest API
 #
-# Copyright (C) 2019 Eric Callahan <arksine.code@gmail.com>
+# Copyright (C) 2020 Eric Callahan <arksine.code@gmail.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license
 
-import sys
+import os
+import mimetypes
 import logging
-import eventlet
-from eventlet.green import os
-from server_util import DEBUG, json_encode, endpoint
-from authorization import ApiAuth
+import tornado
+from tornado import gen
+from server_util import DEBUG, ServerError
+from ws_manager import WebSocket
+from authorization import AuthorizedRequestHandler, AuthorizedFileHandler
+
+# Built-in Query String Parsers
+def _default_parser(query_args):
+    args = {}
+    for key, vals in query_args.iteritems():
+        if len(vals) != 1:
+            raise tornado.web.HTTPError(404, "Invalid Query String")
+        args[key] = vals[0]
+    return args
+
+def _object_parser(query_args):
+    args = {}
+    for key, vals in query_args.iteritems():
+        parsed = []
+        for v in vals:
+            if v:
+                parsed += v.split(',')
+        args[key] = parsed
+    return args
 
 class RestAPI:
-    def __init__(self, wsgi_mgr, server_config):
-        # We must force bottle to be re-imported on restart to correctly
-        # initialze the local context.
-        for module in ['bottle', 'bottle.ext', '__patched_module_bottle']:
-            if module in sys.modules:
-                del sys.modules[module]
-        self.bottle = eventlet.import_patched('bottle')
-        self.bottle.debug(DEBUG)
-        self.request = self.bottle.request
-        self.response = self.bottle.response
-        self.static_file = self.bottle.static_file
-        self.abort = self.bottle.abort
+    def __init__(self, server_mgr, enable_cors):
+        self.server_mgr = server_mgr
+        self.web_path = web_path = server_mgr.web_path
+        self.sd_path = sd_path = server_mgr.sd_path
 
-        self.wsgi_mgr = wsgi_mgr
-        self.www_path = server_config.get('web_path')
-        self.sd_path = server_config.get('sd_path')
+        mimetypes.add_type('text/plain', '.log')
+        mimetypes.add_type('text/plain', '.gcode')
 
-        self.app = self.bottle.Bottle(autojson=False)
-        self.app.install(self.bottle.JSONPlugin(json_dumps=json_encode))
-        self.app.config.update(self._parse_bottle_config(server_config))
-        self._add_routes()
-        self.api_auth = self.app.install(ApiAuth(self.bottle))
+        self.tornado_app = tornado.web.Application([
+            # Printer File management
+            (r'/printer/log()', PrinterFileHandler,
+             {'server_manager': server_mgr,
+              'allow_delete': False, 'path': "/tmp/klippy.log"}),
+            (r'/printer/files', FileListHandler,
+             {'server_manager': server_mgr}),
+            (r'/printer/files/upload', FileUploadHandler,
+             {'server_manager': server_mgr}),
+            (r'/api/files/local', FileUploadHandler,
+             {'server_manager': server_mgr}),
+            (r'/printer/files/(.*)', PrinterFileHandler,
+             {'server_manager': server_mgr, 'path': sd_path}),
+            (r'/api/version', EmulateOctoprintHandler,
+             {'server_manager': server_mgr}),
+            # Access Control
+            (r'/access/api_key', APIKeyRequestHandler,
+             {'server_manager': server_mgr}),
+            (r'/access/oneshot_token', TokenRequestHandler,
+             {'server_manager': server_mgr}),
+            # Static Files
+            (r'/img/(.*)', AuthorizedFileHandler,
+             {'server_manager': server_mgr, 'path': web_path}),
+            (r'/css/(.*)', AuthorizedFileHandler,
+             {'server_manager': server_mgr, 'path': web_path}),
+            (r'/js/(.*)', AuthorizedFileHandler,
+             {'server_manager': server_mgr, 'path': web_path}),
+            (r'/(index\.html|favicon\.ico|)', AuthorizedFileHandler,
+             {'server_manager': server_mgr, 'path': web_path,
+              'default_filename': "index.html"})],
+            serve_traceback=DEBUG,
+            websocket_ping_interval=10,
+            websocket_ping_timeout=30,
+            enable_cors=enable_cors)
 
     def get_app(self):
-        return self.app
+        return self.tornado_app
 
-    def get_key(self):
-        return self.api_auth.get_api_key()
+    def register_api_hooks(self, hooks):
+        # add the websocket handler here as well.  We don't
+        # want it available before the hooks are applied
+        # to the websocket
+        handlers = [
+            (r'/websocket', WebSocket, {'server_manager': self.server_mgr})
+        ]
 
-    def close(self):
-        self.app.close()
+        for (path, methods, parser) in hooks:
+            arg_parser = self._get_parser(parser)
+            params = {
+                'server_manager': self.server_mgr,
+                'methods': methods,
+                'arg_parser': arg_parser}
+            handlers.append((path, KlippyRequestHandler, params))
+        self.tornado_app.add_handlers(r'.*', handlers)
 
-    def register_route(self, request_name, endpoint):
-        def get_obj():
-            return self._process_http_request(request_name)
+    def _get_parser(self, arg_parser):
+        if callable(arg_parser):
+            return arg_parser
 
-        route = "/printer/extras/" + endpoint
-        self.app.get(route, callback=get_obj)
-
-    def _add_routes(self):
-        for attr_name in dir(self):
-            func = getattr(self, attr_name)
-            if hasattr(func, 'route_dict'):
-                routes = func.route_dict
-                for route, kwargs in routes.iteritems():
-                    self.app.route(route, callback=func, **kwargs)
-
-    def _parse_bottle_config(self, server_config):
-        return {
-            'api_auth.api_key_path': server_config.get('api_key_path'),
-            'api_auth.enabled': server_config.get('require_auth'),
-            'api_auth.trusted_ips': server_config.get('trusted_ips'),
-            'api_auth.trusted_ranges': server_config.get('trusted_ranges'),
-            'api_auth.enable_cors': server_config.get('enable_cors')
-        }
-
-    def _prepare_status_request(self, query):
-        request_dict = {}
-        for key, value in query.iteritems():
-            if value:
-                request_dict[key] = value.split(',')
-            else:
-                request_dict[key] = []
-        return request_dict
-
-    def _process_http_request(self, command, *args):
-        evt, uid = self.wsgi_mgr.create_event()
-        timeout = self.wsgi_mgr.forward_klippy_request(command, uid, *args)
-        resp = evt.wait(timeout=timeout)
-        if resp is None:
-            self.wsgi_mgr.remove_event(uid)
-            self.abort(500, "Klippy Request Timed Out")
-        elif isinstance(resp['result'], self.wsgi_mgr.error):
-            self.abort(resp['result'].status_code,
-                       resp['result'].message)
-        return resp
-
-    # XXX - BEGIN TEMPORARY ROUTES - XXX
-    # temporary routes to serve static files.  The complete version
-    # will not serve them, it will be up to the reverse proxy
-    @endpoint.route('/', api_auth_allow=True)
-    def index(self):
-        return self.static_file('index.html', root=self.www_path)
-
-    @endpoint.route('/favicon.ico', api_auth_allow=True)
-    def load_favicon(self):
-        return self.static_file('favicon.ico', root=self.www_path)
-
-    @endpoint.route('/img/<stc_file>', api_auth_allow=True)
-    @endpoint.route('/css/<stc_file>', api_auth_allow=True)
-    @endpoint.route('/js/<stc_file>', api_auth_allow=True)
-    def load_static(self, stc_file):
-        return self.static_file(stc_file, root=self.www_path)
-
-    # XXX - END TEMPORARY ROUTES - XXX
-
-    @endpoint.route('/cors', method=['OPTIONS', 'GET'])
-    def check_cors(self):
-        self.response.headers['Content-type'] = 'application/json'
-        return '[1]'
-
-    @endpoint.route('/websocket')
-    def open_socket(self):
-        environ = self.request.environ
-        ws_handler = self.wsgi_mgr.ws_handler
-
-        def sr(status, headers):
-            sr.status = int(status.split(' ')[0])
-            sr.headers = headers
-
-        body = ws_handler(environ, sr)[0]
-        if hasattr(sr, 'status'):
-            return self.bottle.HTTPResponse(
-                body=body, status=sr.status, headers=sr.headers)
+        if arg_parser.lower() == "object":
+            return _object_parser
         else:
-            return ""
+            return _default_parser
 
-    @endpoint.get('/printer/klippy_info')
-    def get_klippy_info(self):
-        return self._process_http_request('get_klippy_info')
+class KlippyRequestHandler(AuthorizedRequestHandler):
+    def initialize(self, server_manager, methods, arg_parser,
+                   always_allow=False):
+        super(KlippyRequestHandler, self).initialize(
+            server_manager, always_allow)
+        self.methods = methods
+        self.query_parser = arg_parser
 
-    @endpoint.get('/printer/log')
-    def get_log(self):
-        if self.wsgi_mgr.is_printing():
-            self.abort(503, "Cannot Download While Printing")
-        return self.static_file("klippy.log", root="/tmp/", download=True)
+    @gen.coroutine
+    def get(self):
+        if 'GET' in self.methods:
+            yield self._process_http_request('GET')
+        else:
+            raise tornado.web.HTTPError(405)
 
-    @endpoint.get('/printer/files')
-    def get_virtualsd_file_list(self):
-        filelist = self.wsgi_mgr.get_file_list()
-        if isinstance(filelist, self.wsgi_mgr.error):
-            self.abort(400, filelist['result'].message)
-        return {'command': "get_file_list", 'result': filelist}
+    @gen.coroutine
+    def post(self):
+        if 'POST' in self.methods:
+            yield self._process_http_request('POST')
+        else:
+            raise tornado.web.HTTPError(405)
 
-    @endpoint.get('/printer/files/<filename>')
-    def handle_file_download(self, filename):
-        if self.wsgi_mgr.is_printing():
-            self.abort(503, "Cannot Download While Printing")
-        return self.static_file(
-            filename, root=self.sd_path, download=True)
+    @gen.coroutine
+    def _process_http_request(self, method):
+        args = {}
+        if self.request.query:
+            args = self.query_parser(self.request.query_arguments)
+        request = self.manager.make_request(
+            self.request.path, method, args)
+        result = yield request.wait()
+        if isinstance(result, ServerError):
+            raise tornado.web.HTTPError(
+                result.status_code, result.message)
+        self.finish({'result': result})
 
-    @endpoint.post('/api/files/local')
-    @endpoint.post('/printer/files/upload')
-    def handle_file_upload(self):
-        if self.wsgi_mgr.is_printing():
-            self.abort(503, "Cannot Upload While Printing")
-        upload = self.request.files.get('file')
-        start_after_upload = self.request.forms.get('print', "false")
+class PrinterFileHandler(AuthorizedFileHandler):
+    def initialize(self, server_manager, path, allow_delete=True,
+                   default_filename=None):
+        super(PrinterFileHandler, self).initialize(
+            server_manager, path, default_filename)
+        self.allow_delete = allow_delete
+
+    def validate_absolute_path(self, root, absolute_path):
+        # Validate that we arent printing
+        if self.manager.is_printing():
+            raise tornado.web.HTTPError(503, "Cannot Download While Printing")
+
+        return super(PrinterFileHandler, self).validate_absolute_path(
+            root, absolute_path)
+
+    def set_extra_headers(self, path):
+        # The call below shold never return an empty string,
+        # as the path should have already been validated to be
+        # a file
+        basename = os.path.basename(self.absolute_path)
+        self.set_header(
+            "Content-Disposition", "attachment; filename=%s" % (basename))
+
+    def delete(self, path):
+        if not self.allow_delete:
+            raise tornado.web.HTTPError(405)
+
+        # Use the same method Tornado uses to validate the path
+        self.path = self.parse_url_path(path)
+        del path  # make sure we don't refer to path instead of self.path again
+        absolute_path = self.get_absolute_path(self.root, self.path)
+        self.absolute_path = self.validate_absolute_path(
+            self.root, absolute_path)
+        if self.absolute_path is None:
+            return
+
+        os.remove(self.absolute_path)
+        filename = os.path.basename(self.absolute_path)
+        self.manager.notify_filelist_changed(filename, 'removed')
+        self.finish({'result': filename})
+
+class FileListHandler(AuthorizedRequestHandler):
+    def get(self):
+        filelist = self.manager.get_file_list()
+        if isinstance(filelist, ServerError):
+            raise tornado.web.HTTPError(400, filelist['result'].message)
+        self.finish({'result': filelist})
+
+class FileUploadHandler(AuthorizedRequestHandler):
+    @gen.coroutine
+    def post(self):
+        if self.manager.is_printing():
+            raise tornado.web.HTTPError(503, "Cannot Upload While Printing")
+        start_after_upload = False
+        print_args = self.request.arguments.get('print', [])
+        if print_args:
+            start_after_upload = print_args[0].lower() == "true"
+        upload = self.get_file()
+        filename = upload['filename']
         try:
-            destination = os.path.join(self.sd_path, upload.filename)
-            upload.save(destination, overwrite=True)
-            self.wsgi_mgr.notify_filelist_changed(upload.filename, 'added')
+            self.copy_file(upload)
+            self.manager.notify_filelist_changed(filename, 'added')
         except Exception:
-            self.abort(500, "Unable to save file")
-        # TODO: start after upload must not be boolean when applied
-        if start_after_upload.lower() == 'true':
-            self._process_http_request('start_print', upload.filename)
-        return {'command': "upload_file", 'result': upload.filename,
-                'print_started': start_after_upload}
+            raise tornado.web.HTTPError(500, "Unable to save file")
+        if start_after_upload:
+            # Make a Klippy Request to "Start Print"
+            request = self.manager.make_request(
+                "/printer/print/start", 'POST', {'filename': filename})
+            result = yield request.wait()
+            if isinstance(result, ServerError):
+                raise tornado.web.HTTPError(
+                    result.status_code, result.message)
+        self.finish({'result': filename, 'print_started': start_after_upload})
 
-    @endpoint.delete('/printer/files/<filename>')
-    def handle_file_delete(self, filename):
-        if self.wsgi_mgr.is_printing():
-            self.abort(503, "Cannot Delete While Printing")
-        filepath = os.path.join(self.sd_path, filename)
-        if os.path.isfile(filepath):
-            os.remove(filepath)
-            self.wsgi_mgr.notify_filelist_changed(filename, 'removed')
-            return {'command': "delete_file", 'result': filename}
-        else:
-            self.abort(400, "Bad Request")
+    def get_file(self):
+        # File uploads must have a single file request
+        if len(self.request.files) != 1:
+            raise tornado.web.HTTPError(
+                400, "Bad Request, can only process a single file upload")
+        f_list = self.request.files.values()[0]
+        if len(f_list) != 1:
+            raise tornado.web.HTTPError(
+                400, "Bad Request, can only process a single file upload")
+        return f_list[0]
 
-    @endpoint.get('/printer/objects')
-    def query_state(self):
-        accept_hdr = self.request.get_header(
-            "Accept", default="json")
-        is_poll_req = (accept_hdr == 'text/event-stream')
-        if self.request.query_string:
-            req_objs = self._prepare_status_request(self.request.query)
-            cmd = 'add_subscription' if is_poll_req else 'get_status'
-            return self._process_http_request(cmd, req_objs)
-        else:
-            cmd = 'get_subscribed' if is_poll_req else 'get_object_info'
-            return self._process_http_request(cmd)
+    def copy_file(self, file_upload):
+        destination = os.path.join(self.manager.sd_path, file_upload.filename)
+        with open(destination, 'wb') as fh:
+            fh.write(file_upload['body'])
 
-    @endpoint.post('/printer/print/start/<filename>')
-    def start_print(self, filename):
-        return self._process_http_request("start_print", filename)
+class APIKeyRequestHandler(AuthorizedRequestHandler):
+    def get(self):
+        api_key = self.auth_manager.get_api_key()
+        self.finish({'result': api_key})
 
-    @endpoint.post('/printer/print/cancel')
-    def cancel_print(self):
-        return self._process_http_request("cancel_print")
+    def post(self):
+        api_key = self.auth_manager.generate_api_key()
+        self.finish({'result': api_key})
 
-    @endpoint.post('/printer/print/pause')
-    def pause_print(self):
-        return self._process_http_request("pause_print")
+class TokenRequestHandler(AuthorizedRequestHandler):
+    def get(self):
+        token = self.auth_manager.get_access_token()
+        self.finish({'result': token})
 
-    @endpoint.post('/printer/print/resume')
-    def resume_print(self):
-        return self._process_http_request("resume_print")
-
-    @endpoint.post('/printer/gcode/<gcode:path>')
-    def run_gcode(self, gcode):
-        return self._process_http_request('run_gcode', gcode)
-
-    @endpoint.post('/printer/restart')
-    def request_printer_restart(self):
-        return self._process_http_request('restart')
-
-    @endpoint.post('/printer/firmware_restart')
-    def request_firmware_restart(self):
-        return self._process_http_request('firmware_restart')
-
-    @endpoint.get('/access/api_key')
-    def request_api_key(self):
-        api_key = self.api_auth.get_api_key()
-        return {"command": "get_api_key", 'result': api_key}
-
-    @endpoint.post('/access/api_key')
-    def generate_api_key(self):
-        api_key = self.api_auth.generate_api_key()
-        return {'command': "generate_api_key", 'result': api_key}
-
-    # Some http requests cannot add the API key to http headers, such as
-    # the websocket and hyperlinks to downloads.  If clients choose not
-    # to login they can request one time use tokens that may be applied
-    # to the query string or the form data
-    @endpoint.get('/access/oneshot_token')
-    def request_oneshot_token(self):
-        token = self.api_auth.get_access_token()
-        return {'command': "get_oneshot_token", 'result': token}
-
-    # Octoprint upload compatibility: This allows applications
-    # to test their connection.
-    @endpoint.get('/api/version')
-    def emulate_octoprint_version(self):
-        return {
+class EmulateOctoprintHandler(AuthorizedRequestHandler):
+    def get(self):
+        self.finish({
             'server': "1.1.1",
             'api': "0.1",
-            'text': "OctoPrint Upload Emulator"}
+            'text': "OctoPrint Upload Emulator"})

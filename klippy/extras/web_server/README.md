@@ -4,9 +4,7 @@
 
 The Klippy Webserver exposes an API that can be used by web applications to
 interact with Klipper.  This implementation runs within Klippy on its own
-thread. It uses Eventlet's WSGI Server and Websocket implementations, with
-Bottle for the framework.
-
+thread. It depends on Tornado's for the Server, Websocket, and framework.
 ## Installation
 
 Add the following remote to your Klipper git repo:
@@ -31,16 +29,39 @@ If you are doing a fresh Klipper install from the web server branch, all
 of the web server's dependencies will be added when you run install-octopi.sh.
 Otherwise you will need to manually install them:
 ```
-~/klippy-env/bin/pip install eventlet bottle
+~/klippy-env/bin/pip install tornado
 ```
 
 You may notice that aside from the addition of the web_server extra, other
-changes were made to support its additon. The change to gcode.py allows the
-server to capture gcode responses, the change to display.py fixes an issue
-where some variables used by its get_status() call aren't initialized prior
-to being called by web_interface.py.  The query_endstops.py module has been
-modified to use `register_url` to register an endpoint so that clients
-may query endstop state.
+changes were made to support its additon. Below is a detailed list of the
+changes made outside of the `web_server` folder:
+- `webhooks.py` has been added.  This module allows other host modules to
+  host modules to register endpoints without trying to load the web_server
+  module
+- The following changes have been made to `klippy.py`:
+  - The webhooks module is instantiated on printer initialization
+  - The following endpoints are registered and handled:
+    - /printer/info
+    - /printer/restart
+    - /printer/firmware_restart
+  - A "klippy:post_config" event is broadcast immediately after the config
+    has been read, before the unused option check.  The server uses this
+    event to register all webhooks.
+- The following changes have been made to `gcode.py`:
+  - The webhooks module is passed into the GCodeParser's constructor. The
+    the "/printer/gcode" endpoint is registered and handled by the GCodeParser
+    class.
+  - A "gcode:respond" event has been added.  The server uses this event to
+    broadcast gcode responses over all connected websockets
+  - When a write is performed on the pty, the exception handler now checks
+    for errno 11 (resource not available).  If this error is found
+    termios.tcflush is called to flush the output buffer.  This prevents
+    an accumulation of OSErrors from logging and keeps the pty from crashing.
+  - `query_endstops.py` now uses the webhooks module to register the
+    "/printer/endstops" endpoint
+  - `display.py` has been updated initialize all variables in its constructor.
+    This fixes an issue some variables used by its get_status() may be accessed
+    prior to initialization.
 
 A default web_server on port 80 that grants authorization to local clients
 on the IP range 192.168.1.0 can be configured as follows in printer.cfg:
@@ -95,16 +116,22 @@ Below is a detailed explanation of all options currently available:
 #  The amount of time (in seconds) a client request has to process before the
 #  server returns an error.  This timeout does NOT apply to gcode requests.
 #  Default is 5 seconds.
-#gcode_timeout: 60.
-#  The amount of time (in seconds) a gcode request has to process before the
-#  server returns an error.  Default is 60 seconds.
 #long_running_gcodes:
 # BED_MESH_CALIBRATE, 120.
 # M104, 200.
-#  A list of gcodes that will be assigned their own timeout.  The list should be
-#  in the format presented above, where the first item is the gcode name and the
-#  second item is the timeout (in seconds).  Each pair should be separated by a
-#  newline.  The default is an empty list where no gcodes have a unique timeout.
+#   A list of gcodes that will be assigned their own timeout.  The list should
+#   be in the format presented above, where the first item is the gcode name
+#   and the second item is the timeout (in seconds).  Each pair should be
+#   separated by a newline.  The default is an empty list where no gcodes have
+#   a unique timeout.
+#long_running_requests:
+# /printer/gcode, 60.
+# /printer/print/pause, 60.
+# /printer/print/resume, 60.
+# /printer/print/cancel, 60.
+#    A list of requests that will be assigned their own timeout.  The list
+#    should be formatted in the same manner as long_running_gcodes.  The
+#    default is matches the example shown above.
 #status_tier_1:
 # toolhead
 # gcode
@@ -164,7 +191,7 @@ Websocket is required to receive printer generated events.
 
 Note that all HTTP responses are returned as a json encoded object in the form of:
 
-`{command: "<command>", result: <response data>}`
+`{result: <response data>}`
 
 The command matches the original command request, the result is the return
 value generated from the request.
@@ -185,27 +212,27 @@ The `www` folder includes a basic test interface with example usage for most
 of the requests below.  It also includes a basic JSON-RPC implementation that
 uses promises to return responses and errors (see json-rc.js).
 
-### Get Klippy Connection info:
+### Get Klippy host information:
 - HTTP command:\
-  `GET /printer/klippy_info`
+  `GET /printer/info`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "get_klippy_info", id: <request id>}`
+  `{jsonrpc: "2.0", method: "get_printer_info", id: <request id>}`
 
 - Returns:\
-  An object containing the build version, server host name, and if the Klippy
+  An object containing the build version, cpu info, and if the Klippy
   process is ready for operation.  The latter is useful when a client connects
   after the klippy state event has been broadcast.
 
-  `{version: "<version>", hostname: "<hostname>", is_ready: <klippy_ready>}`
+  `{version: "<version>", cpu: "<cpu_info>", is_ready: <klippy_ready>}`
 
 
-### Request available status objects and their attributes:
+### Request available printer objects and their attributes:
 - HTTP command:\
   `GET /printer/objects`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "get_object_info", id: <request id>}`
+  `{jsonrpc: "2.0", method: "get_printer_objects", id: <request id>}`
 
 - Returns:\
   An object containing key, value pairs, where the key is the name of the
@@ -219,10 +246,10 @@ uses promises to return responses and errors (see json-rc.js).
 
 ### Request currently subscribed objects:
 - HTTP command:
-  Same as above, however with the ACCEPT header set to `text/event-stream`
+  `GET /printer/subscriptions`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "get_subscribed", id: <request id>}`
+  `{jsonrpc: "2.0", method: "get_printer_subscriptions", id: <request id>}`
 
 - Returns:\
   An object of the similar that above, however the format of the `result`
@@ -242,7 +269,7 @@ uses promises to return responses and errors (see json-rc.js).
 
 ### Request the a status update for an object, or group of objects:
 - HTTP command:\
-  `GET /printer/objects?gcode`
+  `GET /printer/status?gcode`
 
   The above will fetch a status update for all gcode attributes.  The query
   string can contain multiple items, and specify individual attributes:
@@ -250,8 +277,8 @@ uses promises to return responses and errors (see json-rc.js).
   `?gcode=gcode_position,busy&toolhead&extruder=target`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "get_status", params:
-  [{gcode: [], toolhead: ["position", "status"]}], id: <request id>}`
+  `{jsonrpc: "2.0", method: "get_printer_status", params:
+    {gcode: [], toolhead: ["position", "status"]}, id: <request id>}`
 
   Note that an empty array will fetch all available attributes for its key.
 
@@ -270,13 +297,13 @@ uses promises to return responses and errors (see json-rc.js).
       ...},
     ...}
   ```
-### Subscribe to a status request, or a group of status requests:
+### Subscribe to a status request or a batch of status requests:
 - HTTP command:\
-  Same as above, however with the ACCEPT header set to `text/event-stream`
+  `POST /printer/subscriptions?gcode=gcode_position,bus&extruder=target`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "add_subscription", params:
-  [{gcode: [], toolhead: ["position", "status"]}], id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_subscriptions", params:
+    {gcode: [], toolhead: ["position", "status"]}, id: <request id>}`
 
 - Returns:\
   An acknowledgement that the request has been received:
@@ -287,14 +314,15 @@ uses promises to return responses and errors (see json-rc.js).
 
 ### Run a gcode:
 - HTTP command:\
-  `POST /printer/gcode/<gcode>`
+  `POST /printer/gcode?script=<gc>`
 
   For example,\
-  `POST /gcode/RESPOND MSG=Hello`\
+  `POST /printer/gcode?script=RESPOND MSG=Hello`\
   Will echo "Hello" to the terminal.
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "run_gcode", params: [<gcode>] id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_gcode",
+    params: {script: <gc>}, id: <request id>}`
 
 - Returns:\
   An acknowledgement that the gcode has completed execution:
@@ -303,10 +331,11 @@ uses promises to return responses and errors (see json-rc.js).
 
 ### Print a file
 - HTTP command:\
-  `POST /printer/print/start/<filename>`
+  `POST /printer/print/start?filename=<file name>`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "start_print", params: [<file_name>] id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_print_start",
+    params: {filename: <file name>, id:<request id>}`
 
 - Returns:\
   `ok` on success
@@ -316,7 +345,7 @@ uses promises to return responses and errors (see json-rc.js).
   `POST /printer/print/pause`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "pause_print", id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_print_pause", id: <request id>}`
 
 - Returns:\
   `ok`
@@ -326,7 +355,7 @@ uses promises to return responses and errors (see json-rc.js).
   `POST /printer/print/resume`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "resume_print", id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_print_resume", id: <request id>}`
 
 - Returns:\
   `ok`
@@ -336,7 +365,7 @@ uses promises to return responses and errors (see json-rc.js).
   `POST /printer/print/cancel`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "cancel_print", id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_print_cancel", id: <request id>}`
 
 - Returns:\
   `ok`
@@ -346,7 +375,7 @@ uses promises to return responses and errors (see json-rc.js).
   `POST /printer/restart`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "restart", id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_restart", id: <request id>}`
 
 - Returns:\
   `ok`
@@ -356,7 +385,7 @@ uses promises to return responses and errors (see json-rc.js).
   `POST /printer/firmware_restart`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "firmware_restart", id: <request id>}`
+  `{jsonrpc: "2.0", method: "post_printer_firmware_restart", id: <request id>}`
 
 - Returns:\
   `ok`
@@ -371,7 +400,7 @@ the currrent file list.  It cannot be used to download, upload, or delete files.
   `GET /printer/files`
 
 - Websocket command:\
-  `{jsonrpc: "2.0", method: "get_file_list", id: <request id>}`
+  `{jsonrpc: "2.0", method: "get_printer_files", id: <request id>}`
 
 - Returns:\
   A list of objects containing file data in the following format:
@@ -431,18 +460,12 @@ the currrent file list.  It cannot be used to download, upload, or delete files.
 - Returns:\
   klippy.log, assuming it is located in the default directory (/tmp)
 
-## Dynamically Registered Endpoints
-Some klipper modules may contain state that can not be streamed, thus their
-state is inaccessable via the `/printer/objects` endpoint.  These modules
-may choose to dynamically register endpoints at runtime, where their endpoint
-will be placed in the `/printer/extras` path.
-
 ### Query Endstops
 - HTTP command:\
-  `GET /printer/extras/endstops`
+  `GET /printer/endstops`
 
 - Websocket command:\
-- `{jsonrpc: "2.0", method: "get_endstops", id: <request id>}`
+- `{jsonrpc: "2.0", method: "get_printer_endstops", id: <request id>}`
 
 - Returns:\
   An object containing the current endstop state, with each attribute in the
@@ -577,13 +600,11 @@ it is possible to received multiple notifications that the pause was "cleared",
 even if the printer was never paused.
 
 ## Communication between Klippy and the Web Server
-In this implementation the Web Server runs in the Klippy Process on
+In this implementation the Web Server runs in the Klipper Process on
 its own thread.  The Server sends requests to Klippy via the reactor,
-using the "register_async_callback" method.  Likewise, the server mimics
-the Reactor's mechanism for receiving data from the main thread.  I had
-hoped to use eventlet's "green" Queue, since it yields cooperatively with
-eventlet's greenthreads, however it turns out that it isn't python thread
-safe.
+using the "register_async_callback" method.  The server is able to send
+responses back to the server via Tornado's IOLoop.addCallback method.
+The host uses the same method for pushing notifications to the server
 
 ## Todo:
 - [X] Handle print requests.  Either use the virutal_sdcard, or have the
@@ -598,11 +619,11 @@ safe.
 - [X] Add "register_url" support, where Klippy extra modules can register a
       callback to be executed when an endpoint is accessed.  The request
       should also be registered with the websocket API
-- [ ] Start server before the configuration is read if Kevin is okay with it.
-      This would allow the server to issue "restart" gcode commands if there
-      is a general klippy config error.  This would likely require that the
-      sever has its own configuration file, so the idea may be rejected.
-- [ ] Explore solutions for issue where the pty buffer gets full, resulting in errors
+- [ ] If possible, look into solutions that start the server with a few initial
+      endpoints registered prior to the configuration being read in klippy.py.
+      This would allow clients to connect and issue restart/firmware_restart
+      commands in the event that the configuration is invalid.
+- [X] Explore solutions for issue where the pty buffer gets full, resulting in errors
       logged each time the pty is written to.
 - [ ] Check to see if its possible to unload a virtual SD Card file.  Pausing
       and resetting the file position to 0 works when canceled, but the ideal

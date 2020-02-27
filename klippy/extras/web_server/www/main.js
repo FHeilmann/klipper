@@ -4,7 +4,7 @@
 //
 //  This file may be distributed under the terms of the GNU GPLv3 license
 
-import JsonRPC from "./json-rpc.js?v=0.1";
+import JsonRPC from "./json-rpc.js?v=0.1.2";
 
 var paused = false;
 var api_type = 'http';
@@ -101,27 +101,15 @@ function update_error(cmd, msg) {
 //***********End UI Update Functions****************/
 
 //***********Websocket-Klipper API Functions (JSON-RPC)************/
-function ping() {
-    json_rpc.call_method('ping')
-    .then((result) => {
-        // result is an "ok" acknowledgment that the gcode has
-        // been successfully processed
-        console.log("Ping got PONG");
-    })
-    .catch((error) => {
-        update_error("ping", error);
-    });
-}
-
 function get_file_list() {
-    json_rpc.call_method('get_file_list')
+    json_rpc.call_method('get_printer_files')
     .then((result) => {
         // result is an "ok" acknowledgment that the gcode has
         // been successfully processed
         update_filelist(result);
     })
     .catch((error) => {
-        update_error("get_file_list", error);
+        update_error("get_printer_files", error);
     });
 }
 
@@ -131,9 +119,10 @@ function get_klippy_info() {
     // build version, and if the Host is ready for commands.  Its a
     // good idea to fetch this information after the websocket connects.
     // If the Host is in a "ready" state, we can do some initialization
-    json_rpc.call_method('get_klippy_info')
+    json_rpc.call_method('get_printer_info')
     .then((result) => {
-        update_term("Klippy Hostname: " + result.hostname +
+        update_term("Klippy Hostname: " + location.hostname +
+                " | CPU: " + result.cpu +
                 " | Build Version: " + result.version);
         if (result.is_ready) {
             // We know the host is ready, lets find out if the printer is
@@ -145,12 +134,13 @@ function get_klippy_info() {
 
     })
     .catch((error) => {
-        update_error("get_klippy_info", error);
+        update_error("get_printer_info", error);
     });
 }
 
 function run_gcode(gcode) {
-    json_rpc.call_method('run_gcode', gcode)
+    json_rpc.call_method_with_kwargs(
+        'post_printer_gcode', {script: gcode})
     .then((result) => {
         // result is an "ok" acknowledgment that the gcode has
         // been successfully processed
@@ -166,7 +156,7 @@ function get_status(printer_objects) {
     // In a robust client you would likely pass a callback to this function
     // so that you can respond to various status requests.  It would also
     // be possible to subscribe to status requests and update the UI accordingly
-    json_rpc.call_method('get_status', printer_objects)
+    json_rpc.call_method_with_kwargs('get_printer_status', printer_objects)
     .then((result) => {
         if ("idle_timeout" in result) {
             // Its a good idea that the user understands that some functionality,
@@ -191,43 +181,44 @@ function get_status(printer_objects) {
         console.log(result);
     })
     .catch((error) => {
-        update_error("get_status", error);
+        update_error("get_printer_status", error);
     });
 }
 
 function get_object_info() {
-    json_rpc.call_method('get_object_info')
+    json_rpc.call_method('get_printer_objects')
     .then((result) => {
         // result will be a dictionary containing all available printer
         // objects available for query or subscription
         console.log(result);
     })
     .catch((error) => {
-        update_error("get_object_info", error);
+        update_error("get_printer_objects", error);
     });
 }
 
 function add_subscription(printer_objects) {
-    json_rpc.call_method('add_subscription', printer_objects)
+    json_rpc.call_method_with_kwargs(
+        'post_printer_subscriptions', printer_objects)
     .then((result) => {
         // result is simply an "ok" acknowledgement that subscriptions
         // have been added for requested objects
         console.log(result);
     })
     .catch((error) => {
-        update_error("add_subscription", error);
+        update_error("post_printer_subscriptions", error);
     });
 }
 
 function get_subscribed() {
-    json_rpc.call_method('get_subscribed')
+    json_rpc.call_method('get_printer_subscriptions')
     .then((result) => {
         // result is a dictionary containing all currently subscribed
         // printer objects/attributes
         console.log(result);
     })
     .catch((error) => {
-        update_error("get_subscribed", error);
+        update_error("get_printer_subscriptions", error);
     });
 }
 
@@ -246,50 +237,51 @@ function get_endstops() {
 }
 
 function start_print(file_name) {
-    json_rpc.call_method('start_print', file_name)
+    json_rpc.call_method_with_kwargs(
+        'post_printer_print_start', {'filename': file_name})
     .then((result) => {
         // result is an "ok" acknowledgement that the
         // print has started
         console.log(result);
     })
     .catch((error) => {
-        update_error("start_print", error);
+        update_error("post_printer_print_start", error);
     });
 }
 
 function cancel_print() {
-    json_rpc.call_method('cancel_print')
+    json_rpc.call_method('post_printer_print_cancel')
     .then((result) => {
         // result is an "ok" acknowledgement that the
         // print has been canceled
         console.log(result);
     })
     .catch((error) => {
-        update_error("cancel_print", error);
+        update_error("post_printer_print_cancel", error);
     });
 }
 
 function pause_print() {
-    json_rpc.call_method('pause_print')
+    json_rpc.call_method('post_printer_print_pause')
     .then((result) => {
         // result is an "ok" acknowledgement that the
         // print has been paused
         console.log("Pause Command Executed")
     })
     .catch((error) => {
-        update_error("pause_print", error);
+        update_error("post_printer_print_pause", error);
     });
 }
 
 function resume_print() {
-    json_rpc.call_method('resume_print')
+    json_rpc.call_method('post_printer_print_resume')
     .then((result) => {
         // result is an "ok" acknowledgement that the
         // print has been resumed
         console.log("Resume Command Executed")
     })
     .catch((error) => {
-        update_error("resume_print", error);
+        update_error("post_printer_print_resume", error);
     });
 }
 
@@ -297,13 +289,13 @@ function restart() {
     // We are unlikely to receive a response from a restart
     // request as the websocket will disconnect, so we will
     // call json_rpc.notify instead of call_function.
-    json_rpc.notify('restart');
+    json_rpc.notify('post_printer_restart');
 }
 
 function firmware_restart() {
     // As above, we would not likely receive a response from
     // a firmware_restart request
-    json_rpc.notify('firmware_restart');
+    json_rpc.notify('post_printer_firmware_restart');
 }
 //***********End Websocket-Klipper API Functions (JSON-RPC)********/
 
@@ -442,9 +434,9 @@ function send_gcode_batch(gcodes) {
     for (let gc of gcodes) {
         batch.push(
             {
-                method: 'run_gcode',
+                method: 'post_printer_gcode',
                 type: 'request',
-                params: [gc]
+                params: {script: gc}
             });
     }
 
@@ -482,7 +474,8 @@ function send_gcode_batch(gcodes) {
 async function send_gcode_macro(gcodes) {
     for (let gc of gcodes) {
         try {
-            let result = await json_rpc.call_method('run_gcode', gc);
+            let result = await json_rpc.call_method_with_kwargs(
+                'post_printer_gcode', {script: gc});
         } catch (err) {
             console.log("Error executing gcode macro: " + err.message);
             break;
@@ -516,7 +509,7 @@ class KlippyWebsocket {
 
         this.ws.onclose = (e) => {
             this.connected = false;
-            console.log("Websocket Closed, reconnecting in .5s: ", e.reason);
+            console.log("Websocket Closed, reconnecting in 1s: ", e.reason);
             setTimeout(() => {
                 this.connect();
             }, 1000);
@@ -528,16 +521,10 @@ class KlippyWebsocket {
         };
 
         this.ws.onmessage = (e) => {
-            // Everything over the websocket arrives as a Binary
-            // Blob.  We need to use a FileReader object to read the blob
-            // as text. The JSON_RPC class will then use JSON.parse()
-            // to convert the result into a structure (array or object)
-            let reader = new FileReader();
-            reader.onload = () => {
-                if (this.onmessage != null)
-                    this.onmessage(reader.result);
-            };
-            reader.readAsText(e.data);
+            // Tornado Server Websockets support text encoded frames.
+            // The onmessage callback will send the data straight to
+            // JSON-RPC
+            this.onmessage(e.data);
         };
     }
 
@@ -588,7 +575,7 @@ window.onload = () => {
         $('#gcform [type=text]').val('');
         update_term(line);
         if (api_type == 'http') {
-            let gc_url = "/printer/gcode/" + line
+            let gc_url = "/printer/gcode?script=" + line
             // send a HTTP "run gcode" command
             $.post(gc_url, (data, status) => {
                 update_term(data.result);
@@ -719,7 +706,7 @@ window.onload = () => {
         let filename = $("#filelist").val();
         if (filename) {
             if (api_type == 'http') {
-                let url = "/printer/print/start/" + filename;
+                let url = "/printer/print/start?filename=" + filename;
                 $.post(url, (resp, status) => {
                         console.log(resp);
                         return false;
@@ -796,21 +783,13 @@ window.onload = () => {
         }
     });
 
-    // Subscription Request
+    // Post Subscription Request
     $('#btnsubscribe').click(() => {
         if (api_type == 'http') {
-            // Endpoint is identical to the "get_status" request, however it adds
-            // "text/event-stream" to the Accept header
-            const suburl = "/printer/objects?gcode=gcode_position,speed,speed_factor,extrude_factor" +
+            const suburl = "/printer/subscriptions?gcode=gcode_position,speed,speed_factor,extrude_factor" +
                     "&toolhead&virtual_sdcard&heater_bed&extruder=temperature,target&fan";
-            $.get({
-                url: suburl,
-                headers: {
-                Accept: "text/event-stream"
-                },
-                success: (data, status) => {
-                    console.log(data);
-                }
+            $.post(suburl, (data, status) => {
+                console.log(data);
             });
         } else {
             const sub = {
@@ -824,19 +803,11 @@ window.onload = () => {
         }
     });
 
-    // Get subscription info, adds "text/event-stream" header
+    // Get subscription info
     $('#btngetsub').click(() => {
         if (api_type == 'http') {
-            // Endpoint is identical to the "get_object_info" request, however it adds
-            // "text/event-stream" to the Accept header
-            $.get({
-                url: "/printer/objects",
-                headers: {
-                Accept: "text/event-stream"
-                },
-                success: (resp, status) => {
-                    console.log(resp);
-                }
+            $.get("/printer/subscriptions", (resp, status) => {
+                console.log(resp);
             });
         } else {
             get_subscribed();

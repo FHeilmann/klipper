@@ -1,121 +1,76 @@
-# WSGI Server with Websockets
+# Tornado Server with Websockets
 #
-# Copyright (C) 2019 Eric Callahan <arksine.code@gmail.com>
+# Copyright (C) 2020 Eric Callahan <arksine.code@gmail.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license
-import util
+import os
+import time
 import logging
 import threading
-import Queue
-import eventlet
-from eventlet import wsgi
-from eventlet.green import select, socket, os, time
-from ws_handler import WebsocketHandler
-from server_util import DEBUG, ServerError, json_encode
+import tornado
+from tornado import gen
+from tornado.ioloop import IOLoop
+from tornado.util import TimeoutError
+from tornado.locks import Event
+from ws_manager import WebsocketManager
+from server_util import ServerError, json_encode
 from api import RestAPI
+from authorization import AuthManager
 
-class WSGIManager:
-    error = ServerError
+class ServerManager:
     def __init__(self, request_callback, server_config):
-        self.klippy_request_callback = request_callback
-        self.hostname = server_config.get('host', '0.0.0.0')
+        self.send_klippy_request = request_callback
+        self.host = server_config.get('host', '0.0.0.0')
         self.port = server_config.get('port', 7125)
         self.sd_path = server_config.get('sd_path')
+        self.web_path = server_config.get('web_path')
 
         # Setup command timeouts
-        self.base_timeout = server_config.get('base_timeout', 5.)
-        self.gcode_timeout = server_config.get('gcode_timeout', 60.)
-        self.long_running_gcs = server_config.get('long_running_gcodes', {})
-
+        self.request_timeout = server_config.get('request_timeout', 5.)
+        self.long_running_gcodes = server_config.get('long_running_gcodes')
+        self.long_running_requests = server_config.get('long_running_requests')
+        self.server = self.rest_api = self.auth_manager = None
         self.server_running = False
-        self.rest_api = None
-        self.ws_handler = WebsocketHandler(self)
-        self.command_queue = Queue.Queue()
-        self._resume_fd, self._notify_fd = os.pipe()
-        util.set_nonblock(self._notify_fd)
-        util.set_nonblock(self._resume_fd)
-        self.wsgi_gthrd = self.kreq_gthrd = None
-        self.klippy_printing = False
-        self.pending_events = {}
-        self.command_callbacks = {
-            'response': self._process_klippy_response,
-            'notification': self._process_notification,
-            'register_ep': self._register_endpoint,
-            'kill_server': self._kill_server}
+        self.ws_manager = WebsocketManager(self)
+        self.is_klippy_printing = False
         self.server_thread = threading.Thread(
             target=self.start, args=[server_config])
+        self.server_io_loop = None
         self.server_thread.start()
 
     def start(self, server_config):
-        self.server_running = True
-        self.rest_api = RestAPI(self, server_config)
-        self.kreq_gthrd = eventlet.spawn(self._check_klippy_request)
-        self.wsgi_gthrd = eventlet.spawn(self._wsgi_gthread_handler)
         try:
-            self.wsgi_gthrd.wait()
-        except eventlet.StopServe:
-            pass
-        except Exception:
-            logging.exception("[WEBSERVER]: Server encountered an error")
-        # give the request greenthread a chance to exit
-        eventlet.sleep(.001)
-        if bool(self.kreq_gthrd):
+            self.server_io_loop = IOLoop.current()
+            self.auth_manager = AuthManager(server_config)
+            enable_cors = server_config.get("enable_cors", False)
+            self.rest_api = RestAPI(self, enable_cors)
+            app = self.rest_api.get_app()
             logging.info(
-                "[WEBSERVER]: Request Thread Still Running, "
-                "forceably terminating")
-            self.kreq_gthrd.kill()
+                "[WEBSERVER]: Starting Tornado Server on (%s, %d)" %
+                (self.host, self.port))
+            self.server = app.listen(self.port, address=self.host)
+        except Exception:
+            logging.exception("[WEBSERVER]: Error starting server")
+        self.server_running = True
+        self.server_io_loop.start()
+        self.server_io_loop.close(True)
 
-    def _wsgi_gthread_handler(self):
-        self.listener = eventlet.listen((self.hostname, self.port))
-        self.listener.setsockopt(
-            socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        logging.info(
-            "[WEBSERVER]: Starting WSGI Server on (%s, %d)" %
-            (self.hostname, self.port))
-        wsgi.server(self.listener, self.rest_api.get_app(), debug=DEBUG)
+    def make_request(self, path, method, args):
+        timeout = self.long_running_requests.get(
+            path, self.request_timeout)
 
-    def _check_klippy_request(self):
-        # The "green" eventlet queue is not thread safe, so
-        # we need to use a standard Queue and mimic the
-        # reactor's behavior to transfer data from the main
-        # thread to the server thread.
-        while self.server_running:
-            select.select([self._resume_fd], [], [])
-            try:
-                os.read(self._resume_fd, 4096)
-            except os.error:
-                pass
-            while 1:
-                try:
-                    cmd, args = self.command_queue.get_nowait()
-                except Queue.Empty:
-                    break
-                cb = self.command_callbacks.get(cmd, None)
-                if cb is not None:
-                    cb(*args)
+        if path == "/printer/gcode":
+            script = args.get('script', "")
+            base_gc = script.strip().split()[0].upper()
+            timeout = self.long_running_gcodes.get(base_gc, timeout)
 
-    def forward_klippy_request(self, request, uid, *args):
-        timeout = self.base_timeout
-        if request == "run_gcode":
-            timeout = self._get_gcode_timeout(args[0])
-        self.klippy_request_callback(request, uid, *args)
-        return timeout
-
-    def _get_gcode_timeout(self, gc):
-        base_gc = gc.strip().split()[0].upper()
-        return self.long_running_gcs.get(base_gc, self.gcode_timeout)
+        web_request = WebRequest(
+            self.server_io_loop, path, method, args, timeout)
+        self.send_klippy_request(web_request)
+        return web_request
 
     def is_printing(self):
-        return self.klippy_printing
-
-    def create_event(self):
-        evt = eventlet.Event()
-        uid = id(evt)
-        self.pending_events[uid] = evt
-        return evt, uid
-
-    def remove_event(self, evt_id):
-        return self.pending_events.pop(evt_id, None)
+        return self.is_klippy_printing
 
     def notify_filelist_changed(self, filename, action):
         filelist = self.get_file_list()
@@ -123,7 +78,7 @@ class WSGIManager:
             filelist = []
         result = {'filename': filename, 'action': action,
                   'filelist': filelist}
-        eventlet.spawn_n(
+        self.server_io_loop.spawn_callback(
             self._process_notification, 'filelist_changed', result)
 
     def get_file_list(self):
@@ -139,54 +94,119 @@ class WSGIManager:
                         'modified': time.ctime(os.path.getmtime(fullname))
                     })
         except Exception:
-            return ServerError('get_file_list', "Unable to create file list")
+            return ServerError("Unable to create file list")
         return sorted(filelist, key=lambda val: val['filename'].lower())
 
-    def _process_klippy_response(self, uid, command, result):
-        resp = {'command': command, 'result': result}
-        evt = self.remove_event(uid)
-        if evt is not None:
-            evt.send(resp)
-
+    @gen.coroutine
     def _process_notification(self, name, state):
         if name == 'printer_state_changed':
-            self.klippy_printing = (state.lower() == "printing")
+            self.is_klippy_printing = (state.lower() == "printing")
         # Send Event Over Websocket in JSON-RPC 2.0 format.
         resp = json_encode({
             'jsonrpc': "2.0",
             'method': "notify_" + name,
             'params': [state]})
-        self.ws_handler.send_all_websockets(resp)
+        yield self.ws_manager.send_all_websockets(resp)
 
-    def _register_endpoint(self, request_name, endpoint):
-        self.rest_api.register_route(request_name, endpoint)
-        self.ws_handler.register_rpc_method(request_name)
+    def _register_hooks(self, hooks):
+        self.ws_manager.register_api_hooks(hooks)
+        self.rest_api.register_api_hooks(hooks)
 
+    @gen.coroutine
     def _kill_server(self, reason=None):
         logging.info(
             "[WEBSERVER]: Shutting Down Webserver at request from Klippy")
         if self.server_running:
             self.server_running = False
-            reason = reason or "shutdown"
-            for evt in self.pending_events.values():
-                evt.send({"command": "shutdown", "result": reason})
-            self.pending_events = {}
-            self.ws_handler.close()
-            self.listener.close()
-            self.wsgi_gthrd.kill(eventlet.StopServe)
-            self.rest_api.close()
+            self.server.stop()
+            yield self.ws_manager.close()
+            self.auth_manager.close()
+            self.server_io_loop.stop()
 
-    def run_async_server_cmd(self, cmd, *args):
-        self.command_queue.put_nowait((cmd, args))
-        try:
-            os.write(self._notify_fd, '.')
-        except os.error:
-            pass
+    def is_running(self):
+        return self.server_running
 
     def get_api_key(self):
-        return self.rest_api.get_key()
+        if self.auth_manager is not None:
+            return self.auth_manager.get_api_key()
+        else:
+            return ""
+
+    # Methods Below allow commuinications from Klippy to Server.
+    # The ioloop's "add_callback" method is thread safe
+
+    def send_notification(self, notification, state):
+        self.server_io_loop.add_callback(
+            self._process_notification, notification, state)
+
+    def send_webhooks(self, hooks):
+        self.server_io_loop.add_callback(
+            self._register_hooks, hooks)
 
     def shutdown(self):
         if self.server_thread.is_alive():
-            self.run_async_server_cmd("kill_server", [])
+            self.server_io_loop.add_callback(self._kill_server)
             self.server_thread.join()
+
+
+class WebRequest:
+    error = ServerError
+    def __init__(self, io_loop, path, method, args, timeout):
+        self._server_io_loop = io_loop
+        self.path = path
+        self.method = method
+        self.args = args
+        self.response = None
+        self._event = Event()
+        self._timeout = timeout
+        if timeout is not None:
+            self._timeout = time.time() + timeout
+
+    @gen.coroutine
+    def wait(self):
+        # Wait for klippy to process the request or until the timeout
+        # has been reached.  This should only be called from the
+        # server thread
+        try:
+            yield self._event.wait(timeout=self._timeout)
+        except TimeoutError:
+            raise gen.Return(ServerError("Klippy Request Timed Out", 500))
+        raise gen.Return(self.response)
+
+    def get(self, item):
+        if item not in self.args:
+            raise ServerError("Invalid Argument [%s]" % item)
+        return self.args[item]
+
+    def put(self, name, value):
+        self.args[name] = value
+
+    def get_int(self, item):
+        return int(self.get(item))
+
+    def get_float(self, item):
+        return float(self.get(item))
+
+    def get_args(self):
+        return self.args
+
+    def get_path(self):
+        return self.path
+
+    def get_method(self):
+        return self.method
+
+    def set_error(self, error):
+        self.response = error
+
+    def send(self, data):
+        if self.response is not None:
+            raise ServerError("Multiple calls to send not allowed")
+        self.response = data
+
+    def finish(self):
+        if self.response is None:
+            # No error was set and the user never executed
+            # send, default response is "ok"
+            self.response = "ok"
+        self._server_io_loop.add_callback(self._event.set)

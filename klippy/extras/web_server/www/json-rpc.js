@@ -13,14 +13,17 @@ export default class JsonRPC {
         return uid.toString();
     }
 
-    _build_request(method_name, uid, ...args) {
+    _build_request(method_name, uid, kwargs, ...args) {
         let request = {
             jsonrpc: "2.0",
             method: method_name};
         if (uid != null) {
             request.id = uid;
         }
-        if (args.length > 0) {
+        if (kwargs != null) {
+            request.params = kwargs
+        }
+        else if (args.length > 0) {
             request.params = args;
         }
         return request;
@@ -57,9 +60,14 @@ export default class JsonRPC {
         requests.forEach((request, idx) => {
             let name = request.method;
             let args = [];
+            let kwargs = null;
             let uid = null;
-            if ('params' in request)
-                args = request.params;
+            if ('params' in request) {
+                if (request.params instanceof Object)
+                    kwargs = request.params;
+                else
+                    args = request.params;
+            }
             if (request.type == "request") {
                 uid = this._create_uid();
                 promises.push(new Promise((resolve, reject) => {
@@ -75,7 +83,8 @@ export default class JsonRPC {
                     }
                 }));
             }
-            batch_request.push(this._build_request(name, uid, ...args));
+            batch_request.push(this._build_request(
+                name, uid, kwargs, ...args));
         });
 
         this.transport.send(JSON.stringify(batch_request));
@@ -84,7 +93,26 @@ export default class JsonRPC {
 
     call_method(method_name, ...args) {
         let uid = this._create_uid();
-        let request = this._build_request(method_name, uid, ...args);
+        let request = this._build_request(
+            method_name, uid, null, ...args);
+        if (this.transport != null) {
+            this.transport.send(JSON.stringify(request));
+            return new Promise((resolve, reject) => {
+                this.pending_callbacks[uid] = (result, error) => {
+                    if (error != null) {
+                        reject(error);
+                    } else {
+                        resolve(result);
+                    }
+                }
+            });
+        }
+        return Promise.reject(Error("No Transport Initialized"));
+    }
+
+    call_method_with_kwargs(method_name, kwargs) {
+        let uid = this._create_uid();
+        let request = this._build_request(method_name, uid, kwargs);
         if (this.transport != null) {
             this.transport.send(JSON.stringify(request));
             return new Promise((resolve, reject) => {
@@ -101,7 +129,8 @@ export default class JsonRPC {
     }
 
     notify(method_name, ...args) {
-        let notification = this._build_request(method_name, null, ...args);
+        let notification = this._build_request(
+            method_name, null, null, ...args);
         if (this.transport != null) {
             this.transport.send(JSON.stringify(notification));
         }
