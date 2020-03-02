@@ -121,7 +121,7 @@ function get_klippy_info() {
     // If the Host is in a "ready" state, we can do some initialization
     json_rpc.call_method('get_printer_info')
     .then((result) => {
-        update_term("Klippy Hostname: " + location.hostname +
+        update_term("Klippy Hostname: " + result.hostname +
                 " | CPU: " + result.cpu +
                 " | Build Version: " + result.version);
         if (result.is_ready) {

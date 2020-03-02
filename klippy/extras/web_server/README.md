@@ -224,7 +224,8 @@ uses promises to return responses and errors (see json-rc.js).
   process is ready for operation.  The latter is useful when a client connects
   after the klippy state event has been broadcast.
 
-  `{version: "<version>", cpu: "<cpu_info>", is_ready: <klippy_ready>}`
+  `{version: "<version>", cpu: "<cpu_info>", is_ready: <klippy_ready>,
+    hostname: <hostname>}`
 
 
 ### Request available printer objects and their attributes:
