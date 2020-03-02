@@ -5,7 +5,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import sys, os, optparse, logging, time, threading, collections, importlib
-import util, reactor, queuelogger, msgproto, homing
+import util, reactor, queuelogger, msgproto, homing, socket
 import gcode, configfile, pins, mcu, toolhead, webhooks
 
 message_ready = "Printer is ready"
@@ -150,6 +150,7 @@ class Printer:
             cpu_info = self.start_args['cpu_info']
             web_request.send(
                 {'cpu': cpu_info, 'version': version,
+                 'hostname': socket.gethostname(),
                  'is_ready': self.state_message == message_ready})
         elif path == '/printer/restart':
             self.request_exit('restart')
