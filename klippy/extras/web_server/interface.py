@@ -83,7 +83,7 @@ class KlippyServerInterface:
 
         # Base Config
         server_config['host'] = config.get('host', '0.0.0.0')
-        server_config['port'] = config.getint('port', 7125)
+        server_config['port'] = config.getint('port', 7125, minval=1025)
 
         # Get www path
         default_path = os.path.join(os.path.dirname(__file__), "www/")

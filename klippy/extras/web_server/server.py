@@ -51,6 +51,11 @@ class ServerManager:
             self.server = app.listen(self.port, address=self.host)
         except Exception:
             logging.exception("[WEBSERVER]: Error starting server")
+            if self.auth_manager is not None:
+                self.auth_manager.close()
+            if self.server_io_loop is not None:
+                self.server_io_loop.close(True)
+            return
         self.server_running = True
         self.server_io_loop.start()
         self.server_io_loop.close(True)
