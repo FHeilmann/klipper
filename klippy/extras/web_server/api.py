@@ -198,9 +198,9 @@ class FileUploadHandler(AuthorizedRequestHandler):
         if print_args:
             start_after_upload = print_args[0].lower() == "true"
         upload = self.get_file()
-        filename = upload['filename']
+        filename = "_".join(upload['filename'].strip().split())
         try:
-            self.copy_file(upload)
+            self.copy_file(filename, upload['body'])
             self.manager.notify_filelist_changed(filename, 'added')
         except Exception:
             raise tornado.web.HTTPError(500, "Unable to save file")
@@ -225,10 +225,10 @@ class FileUploadHandler(AuthorizedRequestHandler):
                 400, "Bad Request, can only process a single file upload")
         return f_list[0]
 
-    def copy_file(self, file_upload):
-        destination = os.path.join(self.manager.sd_path, file_upload.filename)
+    def copy_file(self, filename, data):
+        destination = os.path.join(self.manager.sd_path, filename)
         with open(destination, 'wb') as fh:
-            fh.write(file_upload['body'])
+            fh.write(data)
 
 class APIKeyRequestHandler(AuthorizedRequestHandler):
     def get(self):
