@@ -160,7 +160,7 @@ class AuthorizedRequestHandler(tornado.web.RequestHandler):
                 "Origin, Accept, Content-Type, X-Requested-With, "
                 "X-CRSF-Token")
 
-    def options(self):
+    def options(self, *args, **kwargs):
         # Enable CORS if configured
         if self.settings['enable_cors']:
             self.set_status(204)
@@ -191,7 +191,7 @@ class AuthorizedFileHandler(tornado.web.StaticFileHandler):
                 "Origin, Accept, Content-Type, X-Requested-With, "
                 "X-CRSF-Token")
 
-    def options(self):
+    def options(self, *args, **kwargs):
         # Enable CORS if configured
         if self.settings['enable_cors']:
             self.set_status(204)
