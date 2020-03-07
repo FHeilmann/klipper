@@ -62,7 +62,7 @@ class RestAPI:
             (r'/access/oneshot_token', TokenRequestHandler,
              {'server_manager': server_mgr}),
             # Static Files
-            (r'(/img/.*)', AuthorizedFileHandler,
+            (r'/(img/.*)', AuthorizedFileHandler,
              {'server_manager': server_mgr, 'path': web_path}),
             (r'/(css/.*)', AuthorizedFileHandler,
              {'server_manager': server_mgr, 'path': web_path}),
