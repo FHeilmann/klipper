@@ -70,9 +70,10 @@ class RestAPI:
              {'server_manager': server_mgr, 'path': web_path}),
             (r'/(js/.*)', AuthorizedFileHandler,
              {'server_manager': server_mgr, 'path': web_path}),
-            (r'/(index\.html|favicon\.ico|)', AuthorizedFileHandler,
-             {'server_manager': server_mgr, 'path': web_path,
-              'default_filename': "index.html"})],
+            (r'/(favicon\.ico)', AuthorizedFileHandler,
+             {'server_manager': server_mgr, 'path': web_path}),
+            (r'/[^/]*', IndexHandler, {'server_manager': server_mgr})],
+            template_path=web_path,
             serve_traceback=DEBUG,
             websocket_ping_interval=10,
             websocket_ping_timeout=30,
@@ -106,6 +107,10 @@ class RestAPI:
             return _object_parser
         else:
             return _default_parser
+
+class IndexHandler(AuthorizedRequestHandler):
+    def get(self):
+        self.render("index.html")
 
 class KlippyRequestHandler(AuthorizedRequestHandler):
     def initialize(self, server_manager, methods, arg_parser,
