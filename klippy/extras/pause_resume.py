@@ -17,8 +17,34 @@ class PauseResume:
         self.gcode.register_command("PAUSE", self.cmd_PAUSE)
         self.gcode.register_command("RESUME", self.cmd_RESUME)
         self.gcode.register_command("CLEAR_PAUSE", self.cmd_CLEAR_PAUSE)
+        webhooks = self.printer.lookup_object('webhooks')
+        webhooks.register_endpoint(
+            "/printer/print/cancel", self._handle_web_request,
+            methods=["POST"])
+        webhooks.register_endpoint(
+            "/printer/print/pause", self._handle_web_request,
+            methods=["POST"])
+        webhooks.register_endpoint(
+            "/printer/print/resume", self._handle_web_request,
+            methods=["POST"])
     def handle_ready(self):
         self.v_sd = self.printer.lookup_object('virtual_sdcard', None)
+    def _handle_web_request(self, web_request):
+        path = web_request.get_path()
+        if path == "/printer/print/cancel":
+            script = "CANCEL_PRINT"
+        elif path == "/printer/print/pause":
+            if self.is_paused:
+                raise web_request.error("Print Already Paused")
+            script = "PAUSE"
+        elif path == "/printer/print/resume":
+            if not self.is_paused:
+                raise web_request.error("Print Not Paused")
+            script = "RESUME"
+        else:
+            raise web_request.error("Invalid Path")
+        web_request.put('script', script)
+        self.gcode.run_script_from_remote(web_request)
     def get_status(self, eventtime):
         return {
             'is_paused': self.is_paused
