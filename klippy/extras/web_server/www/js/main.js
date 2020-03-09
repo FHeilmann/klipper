@@ -7,6 +7,7 @@
 import JsonRPC from "./json-rpc.js?v=0.1.2";
 
 var paused = false;
+var klippy_ready = false;
 var api_type = 'http';
 var is_printing = false;
 var json_rpc = new JsonRPC();
@@ -125,11 +126,32 @@ function get_klippy_info() {
                 " | CPU: " + result.cpu +
                 " | Build Version: " + result.version);
         if (result.is_ready) {
-            // We know the host is ready, lets find out if the printer is
-            // ready by requesting the idle_timeout status
-            get_status({idle_timeout: [], pause_resume: []});
+            if (!klippy_ready) {
+                klippy_ready = true;
+                // We know the host is ready, subscribed if configured.
+                // If we aren't configured to subscribe on ready, initialize
+                // the printer state and paused state
+                if ($("#cbxSub").is(":checked")) {
+                    // If autosubscribe is check, request the subscription now
+                    const sub = {
+                        gcode: ["gcode_position", "speed", "speed_factor", "extrude_factor"],
+                        idle_timeout: [],
+                        pause_resume: [],
+                        toolhead: [],
+                        virtual_sdcard: [],
+                        heater_bed: [],
+                        extruder: ["temperature", "target"],
+                        fan: []};
+                    add_subscription(sub);
+                } else {
+                    get_status({idle_timeout: [], pause_resume: []});
+                }
+            }
         } else {
-            run_gcode("STATUS");
+            console.log("Klippy Not Ready, checking again in 2s: ");
+            setTimeout(() => {
+                get_klippy_info();
+            }, 2000);
         }
 
     })
@@ -321,26 +343,40 @@ function handle_status_update(status) {
     for (let name in status) {
         let obj = status[name];
         for (let attr in obj) {
+            let full_name = name + "." + attr;
             let val = obj[attr];
-            update_streamdiv(name, attr, val);
+            switch(full_name) {
+                case "virtual_sdcard.current_file":
+                    $('#filename').prop("hidden", val == "");
+                    $('#filename').text("Loaded File: " + val);
+                    break;
+                case "pause_resume.is_paused":
+                    if (paused != val) {
+                        paused = val;
+                        let label = paused ? "Resume Print" : "Pause Print";
+                        $('#btnpauseresume').text(label);
+                        console.log("Paused State Changed: " + val);
+                        update_streamdiv(name, attr, val);
+                    }
+                    break;
+                case "idle_timeout.state":
+                    let state = val.toLowerCase();
+                    if (state != is_printing) {
+                        is_printing = (state == "printing");
+                        $('.toggleable').prop(
+                            'disabled', (api_type == 'websocket' || is_printing));
+                        $('#btnstartprint').prop('disabled', is_printing);
+                        update_streamdiv(name, attr, val);
+                    }
+                    break;
+                default:
+                    update_streamdiv(name, attr, val);
+
+            }
         }
     }
 }
 json_rpc.register_method("notify_status_update", handle_status_update);
-
-function handle_printer_state(state) {
-    // Printer State can be "ready", "printing", or "idle".  Here
-    // We disable a few buttons when the printer is printing to
-    // prevent file manipulation.  The server won't allow it regardless,
-    // but its a good idea to make sure the user knows that via the
-    // client.
-    update_term("Klippy State: " + state);
-    is_printing = (state == "printing");
-    $('.toggleable').prop(
-        'disabled', (api_type == 'websocket' || is_printing));
-    $('#btnstartprint').prop('disabled', is_printing);
-}
-json_rpc.register_method("notify_printer_state_changed", handle_printer_state);
 
 function handle_klippy_state(state) {
     // Klippy state can be "ready", "disconnect", and "shutdown".  This
@@ -348,28 +384,11 @@ function handle_klippy_state(state) {
     // the Host software
     switch(state) {
         case "ready":
-            // Printer just came online, now is a good time to
-            // intialize/refresh state.  It would also be a good
-            // place to subscribe to status updates
-            get_file_list();
-            get_status({idle_timeout: [], pause_resume: []});
-
-            // Initialize the state of the file transfer buttons.  If
-            // we are testing the websocket api they should be disabled,
-            // otherwise enabled
-            $('.toggleable').prop('disabled', (api_type == 'websocket'));
-
-            if ($("#cbxSub").is(":checked")) {
-                // If autosubscribe is check, request the subscription now
-                const sub = {
-                    gcode: ["gcode_position", "speed", "speed_factor", "extrude_factor"],
-                    toolhead: [],
-                    virtual_sdcard: [],
-                    heater_bed: [],
-                    extruder: ["temperature", "target"],
-                    fan: []};
-                add_subscription(sub);
-            }
+            // It would be possible to use this event to notify the
+            // client that the printer has started, however the server
+            // may not start in time for clients to receive this event.
+            // It is being kept in case
+            update_term("Klippy Disconnected, Preparing for Restart");
             break;
         case "disconnect":
             // Klippy has disconnected from the MCU and is prepping to
@@ -377,11 +396,13 @@ function handle_klippy_state(state) {
             // the websocket disconnects.  If we need to do any kind of
             // cleanup on the client to prepare for restart this would
             // be a good place.
+            klippy_ready = false;
             update_term("Klippy Disconnected, Preparing for Restart");
             break;
         case "shutdown":
             // Either M112 was entered or there was a printer error.  We
             // probably want to notify the user and disable certain controls.
+            klippy_ready = false;
             update_term("Klipper has shutdown, check klippy.log for info");
             break;
     }
@@ -395,26 +416,6 @@ function handle_file_list_changed(file_info) {
 }
 json_rpc.register_method("notify_filelist_changed", handle_file_list_changed);
 
-function handle_paused_state(state) {
-    // The state may be "paused", "resumed", or "cleared"
-    if (state == 'paused') {
-        // Paused event received, update client state
-        $('#btnpauseresume').text("Resume Print");
-        paused = true;
-    } else {
-        // Either the print resumed or the pause was cleared.
-        // Note that it is common for printers to clear the
-        // pause state in their start, cancel, and/or end gcodes.
-        // Clients should be aware that they may receive multiple
-        // events with a "cleared" state, even if the printer was
-        // never paused.
-
-        $('#btnpauseresume').text("Pause Print");
-        paused = false;
-    }
-    console.log("Paused state changed: " + state);
-}
-json_rpc.register_method("notify_paused_state_changed", handle_paused_state);
 //***********End Klipper Event Handlers (JSON-RPC)*****************/
 
 // The function below is an example of one way to use JSON-RPC's batch send
@@ -508,6 +509,7 @@ class KlippyWebsocket {
         };
 
         this.ws.onclose = (e) => {
+            klippy_ready = false;
             this.connected = false;
             console.log("Websocket Closed, reconnecting in 1s: ", e.reason);
             setTimeout(() => {
@@ -516,6 +518,7 @@ class KlippyWebsocket {
         };
 
         this.ws.onerror = (err) => {
+            klippy_ready = false;
             console.log("Websocket Error: ", err.message);
             this.ws.close();
         };
@@ -787,13 +790,15 @@ window.onload = () => {
     $('#btnsubscribe').click(() => {
         if (api_type == 'http') {
             const suburl = "/printer/subscriptions?gcode=gcode_position,speed,speed_factor,extrude_factor" +
-                    "&toolhead&virtual_sdcard&heater_bed&extruder=temperature,target&fan";
+                    "&toolhead&virtual_sdcard&heater_bed&extruder=temperature,target&fan&idle_timeout%pause_resume";
             $.post(suburl, (data, status) => {
                 console.log(data);
             });
         } else {
             const sub = {
                 gcode: ["gcode_position", "speed", "speed_factor", "extrude_factor"],
+                idle_timeout: [],
+                pause_resume: [],
                 toolhead: [],
                 virtual_sdcard: [],
                 heater_bed: [],

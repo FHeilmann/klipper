@@ -57,11 +57,12 @@ changes made outside of the `web_server` folder:
     for errno 11 (resource not available).  If this error is found
     termios.tcflush is called to flush the output buffer.  This prevents
     an accumulation of OSErrors from logging and keeps the pty from crashing.
-  - `query_endstops.py` now uses the webhooks module to register the
-    "/printer/endstops" endpoint
-  - `display.py` has been updated initialize all variables in its constructor.
-    This fixes an issue some variables used by its get_status() may be accessed
-    prior to initialization.
+- `query_endstops.py` now uses the webhooks module to register the
+  "/printer/endstops" endpoint
+- `pause_resume.py` now uses the webhooks module to register the
+  "/printer/pause", "/printer/resume", and "/printer/cancel" endpoints
+- `virtual_sdcard.py` has been updated to track and report more data about
+  an ongoing print.
 
 A default web_server on port 80 that grants authorization to local clients
 on the IP range 192.168.1.0 can be configured as follows in printer.cfg:
@@ -102,16 +103,6 @@ Below is a detailed explanation of all options currently available:
 #  The above example will allow 192.168.1.1 - 192.168.1-254.  Note attempting
 #  to use a non-zero value for the last IP segement or different bit value will
 #  result in a configuration error.
-#cancel_gcode:
-#  The gcode to execute when a print is canceled via the web interface. Default
-#  is M25, M26 S0, CLEAR_PAUSE.  This pauses the print and resets the file
-#  positon to 0.  The pause state is also cleared.
-#pause_gcode:
-#  The gcode to execute when a print is paused via the web interface.  Default
-#  is PAUSE.
-#resume_gcode:
-#  The gcode to execute when a print is resumed via the web interface.  Default
-#  is RESUME.
 #request_timeout: 5.
 #  The amount of time (in seconds) a client request has to process before the
 #  server returns an error.  This timeout does NOT apply to gcode requests.
@@ -542,17 +533,6 @@ Status Subscriptions arrive as a "notify_status_update" notification:
 The structure of the status data is identical to the structure that is
 returned from a status request.
 
-### Printer State Changed:
-When the printer changes state, "notify_printer_state_changed" is broadcast.  The
-printer can be in one of the following states:
-- ready
-- printing
-- idle
-
-The notification is broadcast in the following format:
-
-`{jsonrpc: "2.0", method: "notify_printer_state_changed", params: [<state>]}`
-
 ### Klippy Process State Changed:
 The following Klippy state changes are broadcast over the websocket:
 - ready
@@ -583,22 +563,6 @@ The <file changed info> param is an object in the following format:
 The `action` is the operation that resulted in a file list change, the `filename`
 is the name of the file the action was performed on, and the `filelist` is the current
 file list, returned in the same format as `get_file_list`.
-
-### Paused State Changed
-When the host's paused state is changed, a notifcation will be broadcast over
-the websocket:
-
-`{jsonrpc: "2.0", method: "notify_paused_state_changed", params: [<paused state>]}`
-
-The `paused state` may be one of the following:
-- paused
-- resumed
-- cleared
-
-Client developers should be aware that it is common for CLEAR_PAUSE to be
-executed before a print starts, when it ends, and when its canceled.  Thus
-it is possible to received multiple notifications that the pause was "cleared",
-even if the printer was never paused.
 
 ## Communication between Klippy and the Web Server
 In this implementation the Web Server runs in the Klipper Process on

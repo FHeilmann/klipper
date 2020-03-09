@@ -16,16 +16,10 @@ class KlippyServerInterface:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
-        gcode_macro = self.printer.try_load_module(config, 'gcode_macro')
-        self.cancel_gcode = gcode_macro.load_template(
-            config, 'cancel_gcode', "M25\nM26 S0\nCLEAR_PAUSE")
-        self.pause_gcode = gcode_macro.load_template(
-            config, 'pause_gcode', "PAUSE")
-        self.resume_gcode = gcode_macro.load_template(
-            config, 'resume_gcode', "RESUME")
-        self.pause_resume = self.printer.try_load_module(
-            config, 'pause_resume')
-        self.server_manager = self._init_server(config)
+
+        is_fileoutput = (self.printer.get_start_args().get('debugoutput')
+                         is not None)
+        self.server_manager = self._init_server(config, is_fileoutput)
         self.status_hdlr = StatusHandler(
             config, self.server_manager.send_notification)
 
@@ -33,52 +27,28 @@ class KlippyServerInterface:
             "GET_API_KEY", self.cmd_GET_API_KEY,
             desc=self.cmd_GET_API_KEY_help)
 
-        self.printer.register_event_handler(
-            "klippy:post_config", self._register_hooks)
-        self.printer.register_event_handler(
-            "klippy:ready", self._handle_ready)
-        self.printer.register_event_handler(
-            "klippy:disconnect", self._handle_disconnect)
-        self.printer.register_event_handler(
-            "klippy:shutdown", lambda s=self:
-            s._handle_klippy_state("shutdown"))
-        self.printer.register_event_handler(
-            "gcode:respond", self._handle_gcode_response)
-        self.printer.register_event_handler(
-            "idle_timeout:ready", lambda e, s=self:
-            s._handle_printer_state("ready"))
-        self.printer.register_event_handler(
-            "idle_timeout:idle", lambda e, s=self:
-            s._handle_printer_state("idle"))
-        self.printer.register_event_handler(
-            "idle_timeout:printing", lambda e, s=self:
-            s._handle_printer_state("printing"))
-        self.printer.register_event_handler(
-            "pause_resume:paused", lambda s=self:
-            s._handle_paused_state("paused"))
-        self.printer.register_event_handler(
-            "pause_resume:resumed", lambda s=self:
-            s._handle_paused_state("resumed"))
-        self.printer.register_event_handler(
-            "pause_resume:cleared", lambda s=self:
-            s._handle_paused_state("cleared"))
+        # do not register and process events in batch mode, as the
+        # server will not be started
+        if not is_fileoutput:
+            self.printer.register_event_handler(
+                "klippy:connect", self._register_hooks)
+            self.printer.register_event_handler(
+                "klippy:ready", self._handle_ready)
+            self.printer.register_event_handler(
+                "klippy:disconnect", self._handle_disconnect)
+            self.printer.register_event_handler(
+                "klippy:shutdown", lambda s=self:
+                s._handle_klippy_state("shutdown"))
+            self.printer.register_event_handler(
+                "gcode:respond", self._handle_gcode_response)
 
         # Register Webhooks
         self.webhooks = self.printer.lookup_object('webhooks')
         self.webhooks.register_endpoint(
-            "/printer/print/start", self._handle_web_request,
-            methods=["POST"])
-        self.webhooks.register_endpoint(
-            "/printer/print/cancel", self._handle_web_request,
-            methods=["POST"])
-        self.webhooks.register_endpoint(
-            "/printer/print/pause", self._handle_web_request,
-            methods=["POST"])
-        self.webhooks.register_endpoint(
-            "/printer/print/resume", self._handle_web_request,
+            "/printer/print/start", self._handle_start_print_request,
             methods=["POST"])
 
-    def _init_server(self, config):
+    def _init_server(self, config, is_fileoutput):
         server_config = {}
 
         # Base Config
@@ -154,6 +124,7 @@ class KlippyServerInterface:
                     % (ip))
         server_config['trusted_ips'] = trusted_ips
         server_config['trusted_ranges'] = trusted_ranges
+        server_config['is_fileoutput'] = is_fileoutput
         return ServerManager(self.send_async_request, server_config)
 
     def _handle_ready(self):
@@ -171,9 +142,6 @@ class KlippyServerInterface:
     def _handle_klippy_state(self, state):
         self.server_manager.send_notification('klippy_state_changed', state)
 
-    def _handle_paused_state(self, state):
-        self.server_manager.send_notification('paused_state_changed', state)
-
     def _handle_gcode_response(self, gc_response):
         self.server_manager.send_notification('gcode_response', gc_response)
 
@@ -190,25 +158,11 @@ class KlippyServerInterface:
         hooks = self.webhooks.get_hooks()
         self.server_manager.send_webhooks(hooks)
 
-    def _handle_web_request(self, web_request):
-        path = web_request.get_path()
-        if path == "/printer/print/start":
-            filename = web_request.get('filename')
-            if filename[0] != '/':
-                filename = '/' + filename
-            script = "M23 " + filename + "\nM24"
-        elif path == "/printer/print/cancel":
-            script = self.cancel_gcode.render()
-        elif path == "/printer/print/pause":
-            if self.pause_resume.get_status(0)['is_paused']:
-                raise web_request.error("Print Already Paused")
-            script = self.pause_gcode.render()
-        elif path == "/printer/print/resume":
-            if not self.pause_resume.get_status(0)['is_paused']:
-                raise web_request.error("Print Not Paused")
-            script = self.resume_gcode.render()
-        else:
-            raise web_request.error("Invalid Path")
+    def _handle_start_print_request(self, web_request):
+        filename = web_request.get('filename')
+        if filename[0] != '/':
+            filename = '/' + filename
+        script = "M23 " + filename + "\nM24"
         web_request.put('script', script)
         self.gcode.run_script_from_remote(web_request)
 

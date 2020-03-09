@@ -20,6 +20,8 @@ class StatusHandler:
         self.poll_ticks = {
             'toolhead': 1,
             'gcode': 1,
+            'idle_timeout': 1,
+            'pause_resume': 1,
             'fan': 2,
             'virtual_sdcard': 4,
             'extruder.*': 4,

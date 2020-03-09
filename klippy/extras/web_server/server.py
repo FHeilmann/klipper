@@ -36,7 +36,9 @@ class ServerManager:
         self.server_thread = threading.Thread(
             target=self.start, args=[server_config])
         self.server_io_loop = None
-        self.server_thread.start()
+        # Do not start the server thread in batch mode
+        if not server_config.get('is_fileoutput', False):
+            self.server_thread.start()
 
     def start(self, server_config):
         try:
