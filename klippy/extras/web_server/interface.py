@@ -31,7 +31,7 @@ class KlippyServerInterface:
         # server will not be started
         if not is_fileoutput:
             self.printer.register_event_handler(
-                "klippy:connect", self._register_hooks)
+                "klippy:post_config", self._register_hooks)
             self.printer.register_event_handler(
                 "klippy:ready", self._handle_ready)
             self.printer.register_event_handler(
