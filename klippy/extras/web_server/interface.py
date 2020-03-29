@@ -19,6 +19,7 @@ class KlippyServerInterface:
 
         is_fileoutput = (self.printer.get_start_args().get('debugoutput')
                          is not None)
+        self.printer.try_load_module(config, "pause_resume")
         self.server_manager = self._init_server(config, is_fileoutput)
         self.status_hdlr = StatusHandler(
             config, self.server_manager.send_notification)
@@ -41,6 +42,12 @@ class KlippyServerInterface:
                 s._handle_klippy_state("shutdown"))
             self.printer.register_event_handler(
                 "gcode:respond", self._handle_gcode_response)
+            self.printer.register_event_handler(
+                "idle_timeout:printing", self._process_printing_transition)
+            self.printer.register_event_handler(
+                "idle_timeout:ready", self._process_ready_idle_transition)
+            self.printer.register_event_handler(
+                "idle_timeout:idle", self._process_ready_idle_transition)
 
         # Register Webhooks
         self.webhooks = self.printer.lookup_object('webhooks')
@@ -124,6 +131,9 @@ class KlippyServerInterface:
                     % (ip))
         server_config['trusted_ips'] = trusted_ips
         server_config['trusted_ranges'] = trusted_ranges
+
+        server_config['allow_file_ops_when_printing'] = config.getboolean(
+            'allow_file_ops_when_printing', False)
         server_config['is_fileoutput'] = is_fileoutput
         return ServerManager(self.send_async_request, server_config)
 
@@ -136,8 +146,14 @@ class KlippyServerInterface:
         self._handle_klippy_state("disconnect")
         self.server_manager.shutdown()
 
-    def _handle_printer_state(self, state):
-        self.server_manager.send_notification('printer_state_changed', state)
+    def _process_printing_transition(self, print_time):
+        v_sd = self.printer.lookup_object('virtual_sdcard')
+        eventtime = self.reactor.monotonic()
+        current_file = v_sd.get_status(eventtime).get("current_file", "")
+        self.server_manager.update_printing_state(True, current_file)
+
+    def _process_ready_idle_transition(self, print_time):
+        self.server_manager.update_printing_state(False, "")
 
     def _handle_klippy_state(self, state):
         self.server_manager.send_notification('klippy_state_changed', state)

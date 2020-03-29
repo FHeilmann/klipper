@@ -154,10 +154,16 @@ class PrinterFileHandler(AuthorizedFileHandler):
             server_manager, path, default_filename)
         self.allow_delete = allow_delete
 
-    def validate_absolute_path(self, root, absolute_path):
+    def validate_absolute_path(self, root, absolute_path, check_delete=False):
         # Validate that we arent printing
-        if self.manager.is_printing():
-            raise tornado.web.HTTPError(503, "Cannot Download While Printing")
+        filename = None
+        if check_delete:
+            # Get the base file name so we can check against the
+            # currently loaded file
+            filename = os.path.basename(absolute_path)
+        msg = self.manager.check_file_operation(filename)
+        if msg:
+            raise tornado.web.HTTPError(503, msg)
 
         return super(PrinterFileHandler, self).validate_absolute_path(
             root, absolute_path)
@@ -179,7 +185,7 @@ class PrinterFileHandler(AuthorizedFileHandler):
         del path  # make sure we don't refer to path instead of self.path again
         absolute_path = self.get_absolute_path(self.root, self.path)
         self.absolute_path = self.validate_absolute_path(
-            self.root, absolute_path)
+            self.root, absolute_path, True)
         if self.absolute_path is None:
             return
 
@@ -198,14 +204,15 @@ class FileListHandler(AuthorizedRequestHandler):
 class FileUploadHandler(AuthorizedRequestHandler):
     @gen.coroutine
     def post(self):
-        if self.manager.is_printing():
-            raise tornado.web.HTTPError(503, "Cannot Upload While Printing")
         start_after_upload = False
         print_args = self.request.arguments.get('print', [])
         if print_args:
             start_after_upload = print_args[0].lower() == "true"
         upload = self.get_file()
         filename = "_".join(upload['filename'].strip().split())
+        msg = self.manager.check_file_operation(filename)
+        if msg:
+            raise tornado.web.HTTPError(503, msg)
         try:
             self.copy_file(filename, upload['body'])
             self.manager.notify_filelist_changed(filename, 'added')

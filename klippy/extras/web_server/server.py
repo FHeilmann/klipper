@@ -32,7 +32,10 @@ class ServerManager:
         self.server = self.rest_api = self.auth_manager = None
         self.server_running = False
         self.ws_manager = WebsocketManager(self)
+        self.allow_file_ops = server_config.get(
+            'allow_file_ops_when_printing')
         self.is_klippy_printing = False
+        self.current_sd_file = ""
         self.server_thread = threading.Thread(
             target=self.start, args=[server_config])
         self.server_io_loop = None
@@ -76,8 +79,14 @@ class ServerManager:
         self.send_klippy_request(web_request)
         return web_request
 
-    def is_printing(self):
-        return self.is_klippy_printing
+    def check_file_operation(self, file_name=None):
+        if file_name is not None:
+            # don't allow operation against current file
+            if self.current_sd_file == file_name:
+                return "Cannot Modify Currently Loaded File"
+        if self.is_klippy_printing and not self.allow_file_ops:
+            return "Cannot Modify File while Printing"
+        return ""
 
     def notify_filelist_changed(self, filename, action):
         filelist = self.get_file_list()
@@ -105,15 +114,17 @@ class ServerManager:
         return sorted(filelist, key=lambda val: val['filename'].lower())
 
     @gen.coroutine
-    def _process_notification(self, name, state):
-        if name == 'printer_state_changed':
-            self.is_klippy_printing = (state.lower() == "printing")
+    def _process_notification(self, name, data):
         # Send Event Over Websocket in JSON-RPC 2.0 format.
         resp = json_encode({
             'jsonrpc': "2.0",
             'method': "notify_" + name,
-            'params': [state]})
+            'params': [data]})
         yield self.ws_manager.send_all_websockets(resp)
+
+    def _process_printing_state_change(self, is_printing, file_name):
+        self.is_klippy_printing = is_printing
+        self.current_sd_file = file_name
 
     def _register_hooks(self, hooks):
         self.ws_manager.register_api_hooks(hooks)
@@ -141,6 +152,10 @@ class ServerManager:
 
     # Methods Below allow commuinications from Klippy to Server.
     # The ioloop's "add_callback" method is thread safe
+
+    def update_printing_state(self, is_printing, current_file):
+        self.server_io_loop.add_callback(
+            self._process_printing_state_change, is_printing, current_file)
 
     def send_notification(self, notification, state):
         self.server_io_loop.add_callback(
@@ -177,6 +192,8 @@ class WebRequest:
         try:
             yield self._event.wait(timeout=self._timeout)
         except TimeoutError:
+            logging.info("[WEBSERVER]: Request '%s' Timed Out" %
+                         (self.method + " " + self.path))
             raise gen.Return(ServerError("Klippy Request Timed Out", 500))
         raise gen.Return(self.response)
 
