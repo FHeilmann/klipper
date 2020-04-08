@@ -321,6 +321,19 @@ uses promises to return responses and errors (see json-rc.js).
 
   `ok`
 
+### Get GCode Help
+- HTTP command:\
+  `GET /printer/gcode/help`
+
+- Websocket command:\
+  `{jsonrpc: "2.0", method: "get_printer_gcode_help",
+    params: {script: <gc>}, id: <request id>}`
+
+- Returns:\
+  An object where they keys are gcode handlers and values are the associated
+  help strings.  Note that help strings are not available for basic gcode
+  handlers such as G1, G28, etc.
+
 ### Print a file
 - HTTP command:\
   `POST /printer/print/start?filename=<file name>`

@@ -91,7 +91,9 @@ class GCodeParser:
         self.pending_commands = []
         self.bytes_read = 0
         self.input_log = collections.deque([], 50)
-        # Register G-Code Endpoint
+        # Register webhooks
+        webhooks.register_endpoint(
+            '/printer/gcode/help', self._handle_remote_help)
         webhooks.register_endpoint(
             '/printer/gcode', self.run_script_from_remote,
             methods=['POST'])
@@ -353,6 +355,8 @@ class GCodeParser:
         if self.fd_handle is None:
             self.fd_handle = self.reactor.register_fd(self.fd,
                                                       self._process_data)
+    def _handle_remote_help(self, web_request):
+        web_request.send(dict(self.gcode_help))
     def run_script_from_remote(self, web_request):
         script = web_request.get('script')
         if 'M112' in script.upper():

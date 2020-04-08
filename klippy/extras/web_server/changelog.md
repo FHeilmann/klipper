@@ -1,3 +1,6 @@
+### Version .04-alpha -TBD
+- Add `/printer/gcode/help` endpoint to gcode.py
+
 ### Version .03-alpha - 03/09/2020
 - Require that the configured port be above 1024.
 - Fix hard crash if the webserver fails to start.
