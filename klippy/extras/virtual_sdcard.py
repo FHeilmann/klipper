@@ -16,6 +16,9 @@ class VirtualSD:
         self.file_position = self.file_size = 0
         # Print Stat Tracking
         self.print_stats = PrintStats(config)
+        # File List/Info
+        self.filemanager = DetailedFileList(config, self.sdcard_dirname)
+        self.get_detailed_file_list = self.filemanager.get_file_list
         # Work timer
         self.reactor = printer.get_reactor()
         self.must_pause_work = self.cmd_from_sd = False
@@ -33,6 +36,13 @@ class VirtualSD:
         self.gcode.register_command(
             "GET_SD_STATUS", self.cmd_GET_SD_STATUS,
             desc=self.cmd_GET_SD_STATUS_help)
+        # Register Webhooks
+        webhooks = printer.lookup_object('webhooks')
+        webhooks.register_endpoint(
+            "/printer/print/start", self._handle_remote_start_request,
+            methods=["POST"])
+        webhooks.register_endpoint(
+            "/printer/files", self._handle_remote_filelist_request)
     def handle_shutdown(self):
         if self.work_timer is not None:
             self.must_pause_work = True
@@ -47,21 +57,32 @@ class VirtualSD:
             logging.info("Virtual sdcard (%d): %s\nUpcoming (%d): %s",
                          readpos, repr(data[:readcount]),
                          self.file_position, repr(data[readcount:]))
+    def _handle_remote_start_request(self, web_request):
+        filename = web_request.get('filename')
+        if filename[0] != '/':
+            filename = '/' + filename
+        script = "M23 " + filename + "\nM24"
+        web_request.put('script', script)
+        self.gcode.run_script_from_remote(web_request)
+    def _handle_remote_filelist_request(self, web_request):
+        try:
+            filelist = self.get_detailed_file_list()
+        except Exception:
+            raise web_request.error("Unable to retreive file list")
+        flist = []
+        for fname in sorted(filelist, key=str.lower):
+            fdict = {'filename': fname}
+            fdict.update(filelist[fname])
+            flist.append(fdict)
+        web_request.send(flist)
     def stats(self, eventtime):
         if self.work_timer is None:
             return False, ""
         return True, "sd_pos=%d" % (self.file_position,)
     def get_file_list(self):
-        dname = self.sdcard_dirname
-        try:
-            filenames = os.listdir(self.sdcard_dirname)
-            return [(fname, os.path.getsize(os.path.join(dname, fname)))
-                    for fname in sorted(filenames, key=str.lower)
-                    if not fname.startswith('.')
-                    and os.path.isfile((os.path.join(dname, fname)))]
-        except:
-            logging.exception("virtual_sdcard get_file_list")
-            raise self.gcode.error("Unable to get file list")
+        filenames = self.filemanager.get_file_list()
+        return [(fname, filenames[fname]['size'])
+                for fname in sorted(filenames, key=str.lower)]
     def get_status(self, eventtime):
         progress = 0.
         if self.file_size:
@@ -289,6 +310,77 @@ class PrintStats:
             'print_duration': total_duration - time_paused,
             'filament_used': self.filament_used
         }
+
+class DetailedFileList:
+    def __init__(self, config, sd_path):
+        self.printer = config.get_printer()
+        self.gcode = self.printer.lookup_object('gcode')
+        self.gca = self.printer.try_load_module(config, 'gcode_analysis')
+        self.sd_path = sd_path
+        self.file_info = None
+        self.gcode.register_command(
+            "GET_SD_FILE_LIST", self.cmd_GET_SD_FILE_LIST,
+            desc=self.cmd_GET_SD_FILE_LIST_help)
+        self.update_file_list()
+    def update_file_list(self):
+        file_names = self._get_file_names(self.sd_path)
+        if self.file_info is None:
+            self.file_info = {}
+            for fname in file_names:
+                fpath = os.path.join(self.sd_path, fname)
+                try:
+                    self.file_info[fname] = self.gca.get_metadata(fpath)
+                except Exception:
+                    logging.exception("virtual_sdcard: File Detection Error")
+        else:
+            new_file_info = {}
+            for fname in file_names:
+                fpath = os.path.join(self.sd_path, fname)
+                metadata = self.file_info.get(fname, None)
+                try:
+                    if metadata is not None:
+                        new_file_info[fname] = self.gca.update_metadata(
+                            fpath, metadata)
+                    else:
+                        new_file_info[fname] = self.gca.get_metadata(fpath)
+                except Exception:
+                    logging.exception("virtual_sdcard: File Detection Error")
+            self.file_info = new_file_info
+    def get_file_list(self):
+        self.update_file_list()
+        return dict(self.file_info)
+    def _get_file_names(self, path):
+        file_names = []
+        try:
+            for fname in os.listdir(path):
+                if fname.startswith('.'):
+                    continue
+                full_path = os.path.join(path, fname)
+                if os.path.isdir(full_path):
+                    sublist = self._get_file_names(full_path)
+                    for sf in sublist:
+                        file_names.append(os.path.join(fname, sf))
+                elif os.path.isfile(full_path):
+                    file_names.append(fname)
+        except Exception:
+            msg = "virtual_sdcard: unable to generate file list"
+            logging.exception(msg)
+            if self.file_info is None:
+                # File Info not initialized, error occured during config
+                raise self.printer.config_error(msg)
+            else:
+                raise self.gcode.error(msg)
+        return file_names
+    cmd_GET_SD_FILE_LIST_help = "Show Detailed VSD File Information"
+    def cmd_GET_SD_FILE_LIST(self, params):
+        self.update_file_list()
+        msg = "Available Virtual SD Files:\n"
+        for fname in sorted(self.file_info, key=str.lower):
+            msg += "File: %s\n" % (fname)
+            for item in sorted(self.file_info[fname], key=str.lower):
+                msg += "** %s: %s\n" % (item, str(self.file_info[fname][item]))
+            msg += "\n"
+        self.gcode.respond_info(msg)
 
 def load_config(config):
     return VirtualSD(config)
