@@ -105,9 +105,6 @@ class WebsocketManager:
         self.websockets = {}
         self.ws_lock = tornado.locks.Lock()
         self.rpc = JsonRPC()
-        # The file list request is the only method that is not
-        # processed by the klippy host
-        self._register_file_list()
 
     def register_api_hooks(self, hooks):
         for (path, methods, parser) in hooks:
@@ -124,15 +121,6 @@ class WebsocketManager:
             result = yield request.wait()
             raise gen.Return(result)
         return func
-
-    def _register_file_list(self):
-        def handle_file_list_request():
-            future = Future()
-            file_list = self.server_mgr.get_file_list()
-            future.set_result(file_list)
-            return future
-
-        self.rpc.register_method('get_printer_files', handle_file_list_request)
 
     def has_websocket(self, ws_id):
         return ws_id in self.websockets

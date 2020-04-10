@@ -46,8 +46,6 @@ class RestAPI:
             (r'/printer/log()', PrinterFileHandler,
              {'server_manager': server_mgr,
               'allow_delete': False, 'path': "/tmp/klippy.log"}),
-            (r'/printer/files', FileListHandler,
-             {'server_manager': server_mgr}),
             (r'/printer/files/upload', FileUploadHandler,
              {'server_manager': server_mgr}),
             (r'/api/files/local', FileUploadHandler,
@@ -193,13 +191,6 @@ class PrinterFileHandler(AuthorizedFileHandler):
         filename = os.path.basename(self.absolute_path)
         self.manager.notify_filelist_changed(filename, 'removed')
         self.finish({'result': filename})
-
-class FileListHandler(AuthorizedRequestHandler):
-    def get(self):
-        filelist = self.manager.get_file_list()
-        if isinstance(filelist, ServerError):
-            raise tornado.web.HTTPError(400, filelist['result'].message)
-        self.finish({'result': filelist})
 
 class FileUploadHandler(AuthorizedRequestHandler):
     @gen.coroutine

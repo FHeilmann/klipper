@@ -89,29 +89,18 @@ class ServerManager:
         return ""
 
     def notify_filelist_changed(self, filename, action):
-        filelist = self.get_file_list()
+        self.server_io_loop.spawn_callback(
+            self._request_filelist_and_notify, filename, action)
+
+    @gen.coroutine
+    def _request_filelist_and_notify(self, filename, action):
+        flist_request = self.make_request("/printer/files", "GET", {})
+        filelist = yield flist_request.wait()
         if isinstance(filelist, ServerError):
             filelist = []
         result = {'filename': filename, 'action': action,
                   'filelist': filelist}
-        self.server_io_loop.spawn_callback(
-            self._process_notification, 'filelist_changed', result)
-
-    def get_file_list(self):
-        filelist = []
-        try:
-            files = os.listdir(self.sd_path)
-            for f in files:
-                fullname = os.path.join(self.sd_path, f)
-                if os.path.isfile(fullname) and not f.startswith('.'):
-                    filelist.append({
-                        'filename': f,
-                        'size': os.path.getsize(fullname),
-                        'modified': time.ctime(os.path.getmtime(fullname))
-                    })
-        except Exception:
-            return ServerError("Unable to create file list")
-        return sorted(filelist, key=lambda val: val['filename'].lower())
+        yield self._process_notification('filelist_changed', result)
 
     @gen.coroutine
     def _process_notification(self, name, data):

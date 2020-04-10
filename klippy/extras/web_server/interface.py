@@ -49,11 +49,7 @@ class KlippyServerInterface:
             self.printer.register_event_handler(
                 "idle_timeout:idle", self._process_ready_idle_transition)
 
-        # Register Webhooks
         self.webhooks = self.printer.lookup_object('webhooks')
-        self.webhooks.register_endpoint(
-            "/printer/print/start", self._handle_start_print_request,
-            methods=["POST"])
 
     def _init_server(self, config, is_fileoutput):
         server_config = {}
@@ -173,14 +169,6 @@ class KlippyServerInterface:
             raise ServerError("Server Not Ready")
         hooks = self.webhooks.get_hooks()
         self.server_manager.send_webhooks(hooks)
-
-    def _handle_start_print_request(self, web_request):
-        filename = web_request.get('filename')
-        if filename[0] != '/':
-            filename = '/' + filename
-        script = "M23 " + filename + "\nM24"
-        web_request.put('script', script)
-        self.gcode.run_script_from_remote(web_request)
 
     def send_async_request(self, web_request):
         self.reactor.register_async_callback(
