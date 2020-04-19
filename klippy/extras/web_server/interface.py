@@ -68,7 +68,7 @@ class KlippyServerInterface:
             tup_opt = config.get(option_name, None)
             if tup_opt is not None:
                 try:
-                    tup_opt = tup_opt.split('/n')
+                    tup_opt = tup_opt.split('\n')
                     tup_opt = [cmd.split(',', 1) for cmd in tup_opt
                                if cmd.strip()]
                     tup_opt = {k.strip().upper(): float(v.strip()) for (k, v)
