@@ -1,4 +1,4 @@
-# GCode file analysis and metdata extraction helper
+# Enhanced gcode file management and analysis
 #
 # Copyright (C) 2020 Eric Callahan <arksine.code@gmail.com>
 #
@@ -15,6 +15,7 @@ def strip_quotes(string):
     return string
 
 
+VALID_GCODE_EXTS = ['gcode', 'g']
 DEFAULT_READ_SIZE = 32 * 1024
 
 # Helper to extract gcode metadata from a .gcode file
@@ -31,7 +32,7 @@ class SlicerTemplate:
             'object_height': None,
             'first_layer_height': None,
             'layer_height': None,
-            'filament_used': None,
+            'filament_total': None,
             'estimated_time': None}
         gcode_macro = self.printer.try_load_module(config, 'gcode_macro')
         for name in self.templates:
@@ -168,5 +169,133 @@ class GcodeAnalysis:
             return metadata
         return self.get_metadata(file_path)
 
+class FileManager:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.gcode = self.printer.lookup_object('gcode')
+        self.gca = GcodeAnalysis(config)
+        sd = config.get('path', None)
+        if sd is None:
+            vsdcfg = config.getsection('virtual_sdcard')
+            sd = vsdcfg.get('path')
+        self.sd_path = os.path.normpath(os.path.expanduser(sd))
+        self.file_info = None
+        self.gcode.register_command(
+            "GET_FILE_LIST", self.cmd_GET_FILE_LIST,
+            desc=self.cmd_GET_FILE_LIST_help)
+        self._update_file_list()
+        webhooks = self.printer.lookup_object('webhooks')
+        webhooks.register_endpoint(
+            "/printer/files", self._handle_remote_filelist_request)
+        webhooks.register_endpoint(
+            "/printer/files/upload", self._handle_remote_file_request,
+            params={'handler': 'FileUploadHandler', 'path': self.sd_path})
+        # Endpoint for compatibility with Octoprint's legacy upload API
+        webhooks.register_endpoint(
+            "/api/files/local", self._handle_remote_file_request,
+            params={'handler': 'FileUploadHandler', 'path': self.sd_path})
+        webhooks.register_endpoint(
+            "/printer/files/(.*)", self._handle_remote_file_request,
+            methods=['GET', 'DELETE'],
+            params={'handler': 'FileRequestHandler', 'path': self.sd_path})
+
+    def _handle_remote_filelist_request(self, web_request):
+        try:
+            filelist = self.get_file_list()
+        except Exception:
+            raise web_request.error("Unable to retreive file list")
+        flist = []
+        for fname in sorted(filelist, key=str.lower):
+            fdict = {'filename': fname}
+            fdict.update(filelist[fname])
+            flist.append(fdict)
+        web_request.send(flist)
+
+    def _handle_remote_file_request(self, web_request):
+        # The actual file operation is performed by the server, however
+        # the server must check in with the Klippy host to make sure
+        # the operation is safe
+        requested_file = web_request.get('filename')
+        vsd = self.printer.lookup_object('virtual_sdcard', None)
+        print_ongoing = None
+        current_file = ""
+        if vsd is not None:
+            eventtime = self.printer.get_reactor().monotonic()
+            sd_status = vsd.get_status(eventtime)
+            current_file = sd_status['current_file']
+            print_ongoing = sd_status['total_duration'] > 0.000001
+            full_path = os.path.join(self.sd_path, current_file)
+            if full_path == requested_file:
+                raise web_request.error("File currently in use")
+        web_request.send({'print_ongoing': print_ongoing})
+
+    def get_sd_directory(self):
+        return self.sd_path
+
+    def _update_file_list(self):
+        file_names = self._get_file_names(self.sd_path)
+        if self.file_info is None:
+            self.file_info = {}
+            for fname in file_names:
+                fpath = os.path.join(self.sd_path, fname)
+                try:
+                    self.file_info[fname] = self.gca.get_metadata(fpath)
+                except Exception:
+                    logging.exception("FileManager: File Detection Error")
+        else:
+            new_file_info = {}
+            for fname in file_names:
+                fpath = os.path.join(self.sd_path, fname)
+                metadata = self.file_info.get(fname, None)
+                try:
+                    if metadata is not None:
+                        new_file_info[fname] = self.gca.update_metadata(
+                            fpath, metadata)
+                    else:
+                        new_file_info[fname] = self.gca.get_metadata(fpath)
+                except Exception:
+                    logging.exception("FileManager: File Detection Error")
+            self.file_info = new_file_info
+
+    def get_file_list(self):
+        self._update_file_list()
+        return dict(self.file_info)
+
+    def _get_file_names(self, path):
+        file_names = []
+        try:
+            for fname in os.listdir(path):
+                if fname[0] == '.':
+                    continue
+                full_path = os.path.join(path, fname)
+                if os.path.isdir(full_path):
+                    sublist = self._get_file_names(full_path)
+                    for sf in sublist:
+                        file_names.append(os.path.join(fname, sf))
+                elif os.path.isfile(full_path):
+                    ext = fname[fname.rfind('.')+1:]
+                    if ext in VALID_GCODE_EXTS:
+                        file_names.append(fname)
+        except Exception:
+            msg = "FileManager: unable to generate file list"
+            logging.exception(msg)
+            if self.file_info is None:
+                # File Info not initialized, error occured during config
+                raise self.printer.config_error(msg)
+            else:
+                raise self.gcode.error(msg)
+        return file_names
+
+    cmd_GET_FILE_LIST_help = "Show Detailed GCode File Information"
+    def cmd_GET_FILE_LIST(self, params):
+        self._update_file_list()
+        msg = "Available GCode Files:\n"
+        for fname in sorted(self.file_info, key=str.lower):
+            msg += "File: %s\n" % (fname)
+            for item in sorted(self.file_info[fname], key=str.lower):
+                msg += "** %s: %s\n" % (item, str(self.file_info[fname][item]))
+            msg += "\n"
+        self.gcode.respond_info(msg)
+
 def load_config(config):
-    return GcodeAnalysis(config)
+    return FileManager(config)
