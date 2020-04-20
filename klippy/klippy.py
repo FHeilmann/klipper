@@ -69,6 +69,12 @@ class Printer:
         web_hooks.register_endpoint(
             '/printer/firmware_restart', self._handle_web_request,
             methods=['POST'])
+        # Endpoint for log file, does not require a handler
+        log_file = start_args.get('log_file')
+        if log_file is not None:
+            web_hooks.register_endpoint(
+                "/printer/log()", None,
+                params={'handler': 'FileRequestHandler', 'path': log_file})
     def get_start_args(self):
         return self.start_args
     def get_reactor(self):
@@ -295,6 +301,7 @@ def main():
         start_args['debugoutput'] = options.debugoutput
         start_args.update(options.dictionary)
     if options.logfile:
+        start_args['log_file'] = options.logfile
         bglogger = queuelogger.setup_bg_logging(options.logfile, debuglevel)
     else:
         logging.basicConfig(level=debuglevel)
