@@ -1,5 +1,21 @@
-### Version .04-alpha -TBD
+### Version .04-alpha - 04/20/2020
 - Add `/printer/gcode/help` endpoint to gcode.py
+- Allow the clients to fetch .json files in the root web directory
+- Add support for detailed print tracking to virtual_sdcard.py.  This
+  includes filament usage and print time tracking
+- Add new file_manager.py module for advanced gcode file management. Gcode
+  files may exist in subdirectories.  This module also supports extracting
+  metadata from gcode files.
+- Clean up API registration.  All endpoints are now registered by Klippy
+  host modules outside of static files and `/api/version`, which is used for
+  compatibility with Octoprint's legacy file upload API.
+- The server now runs in its own process.  Communication between the Host and
+  the server is done over a duplex pipe.  Currently this results in a second
+  log file being generated specifically for the server at
+  `/tmp/klippy_server.log`.  This is likely a temporary solution, and as such
+  a temporary endpoint has been added at `/printer/klippy_server.log`.  Users
+  can use the browser to download the log by navigating to
+  `http://<host>/printer/klippy_server.log`.
 
 ### Version .03-alpha - 03/09/2020
 - Require that the configured port be above 1024.

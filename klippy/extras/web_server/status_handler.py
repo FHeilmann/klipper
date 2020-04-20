@@ -6,6 +6,18 @@
 import re
 import logging
 
+# Status objects require special parsing
+def _status_parser(request):
+    query_args = request.query_arguments
+    args = {}
+    for key, vals in query_args.iteritems():
+        parsed = []
+        for v in vals:
+            if v:
+                parsed += v.split(',')
+        args[key] = parsed
+    return args
+
 class StatusHandler:
     def __init__(self, config, notification_cb):
         self.printer = config.get_printer()
@@ -50,10 +62,10 @@ class StatusHandler:
             '/printer/objects', self._handle_object_request)
         webhooks.register_endpoint(
             '/printer/status', self._handle_status_request,
-            arg_parser="object")
+            params={'arg_parser': _status_parser})
         webhooks.register_endpoint(
             '/printer/subscriptions', self._handle_subscription_request,
-            methods=['GET', 'POST'], arg_parser="object")
+            ['GET', 'POST'], {'arg_parser': _status_parser})
 
     def handle_ready(self):
         self.printer_ready = True
@@ -92,13 +104,19 @@ class StatusHandler:
                 obj = self.printer.lookup_object(name, None)
                 if obj is not None and name in self.available_objects:
                     status = obj.get_status(self.reactor.monotonic())
+                    # Determine requested attributes.  If empty, return
+                    # all requested attributes
                     if not objects[name]:
-                        objects[name] = status
+                        requested_attrs = status.keys()
                     else:
-                        attrs = list(objects[name])
-                        objects[name] = {}
-                        for a in attrs:
-                            objects[name][a] = status.get(a, "<invalid>")
+                        requested_attrs = list(objects[name])
+                    objects[name] = {}
+                    for attr in requested_attrs:
+                        val = status.get(attr, "<invalid>")
+                        # Don't return callable values
+                        if callable(val):
+                            continue
+                        objects[name][attr] = val
                 else:
                     objects[name] = "<invalid>"
         else:

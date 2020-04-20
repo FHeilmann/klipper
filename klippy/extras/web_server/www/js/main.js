@@ -188,8 +188,10 @@ function get_status(printer_objects) {
             if ("state" in result.idle_timeout) {
                 let state = result.idle_timeout.state.toLowerCase();
                 is_printing = (state == "printing");
-                $('.toggleable').prop(
-                    'disabled', (api_type == 'websocket' || is_printing));
+                if (!$('#cbxFileTransfer').is(":checked")) {
+                    $('.toggleable').prop(
+                        'disabled', (api_type == 'websocket' || is_printing));
+                }
                 $('#btnstartprint').prop('disabled', is_printing);
             }
         }
@@ -363,8 +365,10 @@ function handle_status_update(status) {
                     let state = val.toLowerCase();
                     if (state != is_printing) {
                         is_printing = (state == "printing");
-                        $('.toggleable').prop(
-                            'disabled', (api_type == 'websocket' || is_printing));
+                        if (!$('#cbxFileTransfer').is(":checked")) {
+                            $('.toggleable').prop(
+                                'disabled', (api_type == 'websocket' || is_printing));
+                        }
                         $('#btnstartprint').prop('disabled', is_printing);
                         update_streamdiv(name, attr, val);
                     }
@@ -388,7 +392,7 @@ function handle_klippy_state(state) {
             // client that the printer has started, however the server
             // may not start in time for clients to receive this event.
             // It is being kept in case
-            update_term("Klippy Disconnected, Preparing for Restart");
+            update_term("Klippy Ready");
             break;
         case "disconnect":
             // Klippy has disconnected from the MCU and is prepping to
@@ -564,9 +568,19 @@ window.onload = () => {
     $('.reqws').prop('disabled', true);
     $('input[type=radio][name=test_type]').on('change', function() {
         api_type = $(this).val();
-         $('.toggleable').prop(
-             'disabled', (api_type == 'websocket' || is_printing));
+        if (!$('#cbxFileTransfer').is(":checked")) {
+            $('.toggleable').prop(
+                'disabled', (api_type == 'websocket' || is_printing));
+         }
         $('.reqws').prop('disabled', (api_type == 'http'));
+    });
+
+    $('#cbxFileTransfer').on('change', function () {
+        let disabled = false;
+        if (!$(this).is(":checked")) {
+            disabled = (api_type == 'websocket' || is_printing);
+        }
+        $('.toggleable').prop( 'disabled', disabled);
     });
 
     // Send a gcode.  Note that in the test client nearly every control

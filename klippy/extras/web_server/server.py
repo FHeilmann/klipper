@@ -6,10 +6,11 @@
 import os
 import time
 import logging
-import threading
+import multiprocessing
 import tornado
+import util
 from tornado import gen
-from tornado.ioloop import IOLoop
+from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.util import TimeoutError
 from tornado.locks import Event
 from ws_manager import WebsocketManager
@@ -17,14 +18,14 @@ from server_util import ServerError, json_encode
 from api import RestAPI
 from authorization import AuthManager
 
+LOG_FILE = "klippy_server.log"
+PROCESS_CHECK_MS = 100
+
 class ServerManager:
-    def __init__(self, request_callback, server_config):
-        self.send_klippy_request = request_callback
+    def __init__(self, pipe, server_config):
         self.host = server_config.get('host', '0.0.0.0')
         self.port = server_config.get('port', 7125)
-        self.sd_path = server_config.get('sd_path')
-        self.web_path = server_config.get('web_path')
-
+        self.parent_pid = server_config.get('parent_pid')
         # Setup command timeouts
         self.request_timeout = server_config.get('request_timeout', 5.)
         self.long_running_gcodes = server_config.get('long_running_gcodes')
@@ -32,28 +33,31 @@ class ServerManager:
         self.server = self.rest_api = self.auth_manager = None
         self.server_running = False
         self.ws_manager = WebsocketManager(self)
-        self.allow_file_ops = server_config.get(
-            'allow_file_ops_when_printing')
-        self.is_klippy_printing = False
-        self.current_sd_file = ""
-        self.server_thread = threading.Thread(
-            target=self.start, args=[server_config])
+        self.klippy_pipe = pipe
+        self.process_check_cb = None
         self.server_io_loop = None
-        # Do not start the server thread in batch mode
-        if not server_config.get('is_fileoutput', False):
-            self.server_thread.start()
+
+        # Setup host/server callbacks
+        self.events = {}
+        self.server_callbacks = {
+            'register_hooks': self._register_webhooks,
+            'response': self._handle_klippy_response,
+            'notification': self._handle_notification,
+            'shutdown': self._handle_shutdown_request,
+        }
 
     def start(self, server_config):
         try:
             self.server_io_loop = IOLoop.current()
             self.auth_manager = AuthManager(server_config)
-            enable_cors = server_config.get("enable_cors", False)
-            self.rest_api = RestAPI(self, enable_cors)
+            self.rest_api = RestAPI(self, server_config)
             app = self.rest_api.get_app()
             logging.info(
                 "[WEBSERVER]: Starting Tornado Server on (%s, %d)" %
                 (self.host, self.port))
-            self.server = app.listen(self.port, address=self.host)
+            self.server = app.listen(
+                self.port, address=self.host,
+                max_body_size=200*1024*1024)
         except Exception:
             logging.exception("[WEBSERVER]: Error starting server")
             if self.auth_manager is not None:
@@ -62,8 +66,48 @@ class ServerManager:
                 self.server_io_loop.close(True)
             return
         self.server_running = True
+        self.server_io_loop.add_handler(
+            self.klippy_pipe.fileno(), self._handle_klippy_data,
+            IOLoop.READ)
+        self.process_check_cb = PeriodicCallback(
+            self._check_parent_proc, PROCESS_CHECK_MS)
+        self.process_check_cb.start()
         self.server_io_loop.start()
         self.server_io_loop.close(True)
+        logging.info("Server Shutdown")
+
+    def _handle_klippy_data(self, fd, events):
+        try:
+            resp, args = self.klippy_pipe.recv()
+        except Exception:
+            return
+        cb = self.server_callbacks.get(resp)
+        if cb is not None:
+            cb(*args)
+
+    def _check_parent_proc(self):
+        # Looks hacky, but does not actually kill the parent process
+        try:
+            os.kill(self.parent_pid, 0)
+        except OSError:
+            logging.info("[WEBSERVER]: Parent process killed, exiting")
+            self.server_io_loop.spawn_callback(self._kill_server)
+
+    def _register_webhooks(self, hooks):
+        self.server_io_loop.add_callback(
+            self._register_hooks, hooks)
+
+    def _handle_klippy_response(self, request_id, response):
+        evt = self.events.pop(request_id)
+        if evt is not None:
+            evt.notify(response)
+
+    def _handle_notification(self, notification, state):
+        self.server_io_loop.spawn_callback(
+            self._process_notification, notification, state)
+
+    def _handle_shutdown_request(self):
+        self.server_io_loop.spawn_callback(self._kill_server)
 
     def make_request(self, path, method, args):
         timeout = self.long_running_requests.get(
@@ -74,19 +118,11 @@ class ServerManager:
             base_gc = script.strip().split()[0].upper()
             timeout = self.long_running_gcodes.get(base_gc, timeout)
 
-        web_request = WebRequest(
-            self.server_io_loop, path, method, args, timeout)
-        self.send_klippy_request(web_request)
-        return web_request
-
-    def check_file_operation(self, file_name=None):
-        if file_name is not None:
-            # don't allow operation against current file
-            if self.current_sd_file == file_name:
-                return "Cannot Modify Currently Loaded File"
-        if self.is_klippy_printing and not self.allow_file_ops:
-            return "Cannot Modify File while Printing"
-        return ""
+        base_request = BaseRequest(path, method, args)
+        event = ServerEvent(self.server_io_loop, timeout, base_request)
+        self.events[base_request.id] = event
+        self.klippy_pipe.send(base_request)
+        return event
 
     def notify_filelist_changed(self, filename, action):
         self.server_io_loop.spawn_callback(
@@ -111,18 +147,15 @@ class ServerManager:
             'params': [data]})
         yield self.ws_manager.send_all_websockets(resp)
 
-    def _process_printing_state_change(self, is_printing, file_name):
-        self.is_klippy_printing = is_printing
-        self.current_sd_file = file_name
-
     def _register_hooks(self, hooks):
         self.ws_manager.register_api_hooks(hooks)
         self.rest_api.register_api_hooks(hooks)
 
     @gen.coroutine
-    def _kill_server(self, reason=None):
+    def _kill_server(self):
         logging.info(
-            "[WEBSERVER]: Shutting Down Webserver at request from Klippy")
+            "[WEBSERVER]: Shutting Down Webserver")
+        self.process_check_cb.stop()
         if self.server_running:
             self.server_running = False
             self.server.stop()
@@ -130,46 +163,13 @@ class ServerManager:
             self.auth_manager.close()
             self.server_io_loop.stop()
 
-    def is_running(self):
-        return self.server_running
-
-    def get_api_key(self):
-        if self.auth_manager is not None:
-            return self.auth_manager.get_api_key()
-        else:
-            return ""
-
-    # Methods Below allow commuinications from Klippy to Server.
-    # The ioloop's "add_callback" method is thread safe
-
-    def update_printing_state(self, is_printing, current_file):
-        self.server_io_loop.add_callback(
-            self._process_printing_state_change, is_printing, current_file)
-
-    def send_notification(self, notification, state):
-        self.server_io_loop.add_callback(
-            self._process_notification, notification, state)
-
-    def send_webhooks(self, hooks):
-        self.server_io_loop.add_callback(
-            self._register_hooks, hooks)
-
-    def shutdown(self):
-        if self.server_thread.is_alive():
-            self.server_io_loop.add_callback(self._kill_server)
-            self.server_thread.join()
-
-
-class WebRequest:
-    error = ServerError
-    def __init__(self, io_loop, path, method, args, timeout):
+class ServerEvent:
+    def __init__(self, io_loop, timeout, request):
         self._server_io_loop = io_loop
-        self.path = path
-        self.method = method
-        self.args = args
-        self.response = None
-        self._event = Event()
         self._timeout = timeout
+        self._event = Event()
+        self.request = request
+        self.response = None
         if timeout is not None:
             self._timeout = time.time() + timeout
 
@@ -182,44 +182,46 @@ class WebRequest:
             yield self._event.wait(timeout=self._timeout)
         except TimeoutError:
             logging.info("[WEBSERVER]: Request '%s' Timed Out" %
-                         (self.method + " " + self.path))
+                         (self.request.method + " " + self.request.path))
             raise gen.Return(ServerError("Klippy Request Timed Out", 500))
         raise gen.Return(self.response)
 
-    def get(self, item):
-        if item not in self.args:
-            raise ServerError("Invalid Argument [%s]" % item)
-        return self.args[item]
-
-    def put(self, name, value):
-        self.args[name] = value
-
-    def get_int(self, item):
-        return int(self.get(item))
-
-    def get_float(self, item):
-        return float(self.get(item))
-
-    def get_args(self):
-        return self.args
-
-    def get_path(self):
-        return self.path
-
-    def get_method(self):
-        return self.method
-
-    def set_error(self, error):
-        self.response = error
-
-    def send(self, data):
-        if self.response is not None:
-            raise ServerError("Multiple calls to send not allowed")
-        self.response = data
-
-    def finish(self):
-        if self.response is None:
-            # No error was set and the user never executed
-            # send, default response is "ok"
-            self.response = "ok"
+    def notify(self, response):
+        self.response = response
         self._server_io_loop.add_callback(self._event.set)
+
+# Basic WebRequest class pass over the pipe to reduce the amount of
+# data pickled/unpickled
+class BaseRequest:
+    error = ServerError
+    def __init__(self, path, method, args):
+        self.id = id(self)
+        self.path = path
+        self.method = method
+        self.args = args
+
+def _start_server(pipe, config):
+    # Set up root logger on new process
+    root_logger = logging.getLogger()
+    log_file = os.path.join("/tmp", LOG_FILE)
+    file_hdlr = logging.handlers.TimedRotatingFileHandler(
+        log_file, when='midnight', backupCount=2)
+    root_logger.addHandler(file_hdlr)
+    root_logger.setLevel(logging.DEBUG)
+    logging.info("Starting Klippy Tornado Server...")
+
+    # Start Tornado Server
+    try:
+        server = ServerManager(pipe, config)
+        server.start(config)
+    except Exception:
+        logging.exception("Error Running Server")
+
+def load_server_process(server_config):
+    pp, cp = multiprocessing.Pipe()
+    util.set_nonblock(pp.fileno())
+    util.set_nonblock(cp.fileno())
+    proc = multiprocessing.Process(
+        target=_start_server, args=(cp, server_config,))
+    proc.start()
+    return pp, proc

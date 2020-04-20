@@ -5,6 +5,9 @@
 # This file may be distributed under the terms of the GNU GPLv3 license
 
 import json
+import os
+import uuid
+import logging
 
 DEBUG = True
 
@@ -41,3 +44,26 @@ def byteify(data, ignore_dicts=False):
 def json_loads_byteified(data):
     return byteify(
         json.loads(data, object_hook=byteify), True)
+
+
+API_KEY_FILE = '.klippy_api_key'
+
+def read_api_key(path):
+    api_file = os.path.join(path, API_KEY_FILE)
+    if os.path.exists(api_file):
+        with open(api_file, 'r') as f:
+            api_key = f.read()
+        return api_key
+    # API Key file doesn't exist.  Generate
+    # a new api key and create the file.
+    logging.info(
+        "[WEBSERVER]: No API Key file found, creating new one at:\n%s"
+        % (api_file))
+    return create_api_key(path)
+
+def create_api_key(path):
+    api_file = os.path.join(path, API_KEY_FILE)
+    api_key = uuid.uuid4().hex
+    with open(api_file, 'w') as f:
+        f.write(api_key)
+    return api_key

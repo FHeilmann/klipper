@@ -4,7 +4,6 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license
 import base64
-import uuid
 import os
 import time
 import logging
@@ -13,49 +12,25 @@ from tornado.ioloop import IOLoop, PeriodicCallback
 
 TOKEN_TIMEOUT = 5
 CONNECTION_TIMEOUT = 3600
-PRUNE_CHECK_TIME = 300
-API_KEY_FILE = '.klippy_api_key'
-
-def _read_api_key(path):
-    api_file = os.path.join(path, API_KEY_FILE)
-    if os.path.exists(api_file):
-        with open(api_file, 'r') as f:
-            api_key = f.read()
-        return api_key
-    # API Key file doesn't exist.  Generate
-    # a new api key and create the file.
-    logging.info(
-        "[WEBSERVER]: No API Key file found, creating new one at:\n%s"
-        % (api_file))
-    return _create_api_key(path)
-
-def _create_api_key(path):
-    api_file = os.path.join(path, API_KEY_FILE)
-    api_key = uuid.uuid4().hex
-    with open(api_file, 'w') as f:
-        f.write(api_key)
-    return api_key
+PRUNE_CHECK_TIME = 300 * 1000
 
 class AuthManager:
     def __init__(self, config):
-        self.api_key_path = config.get(
-            "api_key_path", os.path.expanduser("~"))
+        self.api_key = config.get('api_key')
         self.auth_enabled = config.get("require_auth", True)
         self.trusted_ips = config.get("trusted_ips", [])
         self.trusted_ranges = config.get("trusted_ranges", [])
         self.trusted_connections = {}
-        self.api_key = _read_api_key(self.api_key_path)
         self.access_tokens = {}
         self.prune_handler = PeriodicCallback(
             self._prune_conn_handler, PRUNE_CHECK_TIME)
         self.prune_handler.start()
         logging.info(
             "[WEBSERVER]: Authorization Plugin Initialized\n"
-            "API Key Path: %s\n"
             "Auth Enabled: %s\n"
             "Trusted IPs:\n%s\n"
             "Trusted IP Ranges:\n%s" %
-            (self.api_key_path, self.auth_enabled,
+            (self.auth_enabled,
              ('\n').join(self.trusted_ips),
              ('\n').join(self.trusted_ranges)))
 
@@ -75,12 +50,6 @@ class AuthManager:
 
     def is_enabled(self):
         return self.auth_enabled
-
-    def get_api_key(self):
-        return self.api_key
-
-    def generate_api_key(self):
-        self.api_key = _create_api_key(self.api_key_path)
 
     def get_access_token(self):
         token = base64.b32encode(os.urandom(20))
@@ -136,16 +105,11 @@ class AuthManager:
         self.prune_handler.stop()
 
 class AuthorizedRequestHandler(tornado.web.RequestHandler):
-    def initialize(self, server_manager, always_allow=False):
+    def initialize(self, server_manager):
         self.manager = server_manager
         self.auth_manager = server_manager.auth_manager
-        self.always_allow = always_allow
 
     def prepare(self):
-        # Bypass authorization checks for this request
-        if self.always_allow:
-            return
-
         if not self.auth_manager.check_authorized(self.request):
             raise tornado.web.HTTPError(401, "Unauthorized")
 

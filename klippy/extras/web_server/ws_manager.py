@@ -101,13 +101,16 @@ class JsonRPC:
 class WebsocketManager:
     def __init__(self, server_mgr):
         self.server_mgr = server_mgr
-        self.sd_path = server_mgr.sd_path
         self.websockets = {}
         self.ws_lock = tornado.locks.Lock()
         self.rpc = JsonRPC()
 
     def register_api_hooks(self, hooks):
-        for (path, methods, parser) in hooks:
+        for (path, methods, params) in hooks:
+            request_type = params.get('handler', "KlippyRequestHandler")
+            if request_type != "KlippyRequestHandler":
+                # Websocket on supports basic Klippy Requests
+                continue
             for method in methods:
                 # Format the endpoint into something more json friendly
                 cmd = method.lower() + path.replace('/', '_')

@@ -13,8 +13,13 @@ from server_util import DEBUG, ServerError
 from ws_manager import WebSocket
 from authorization import AuthorizedRequestHandler, AuthorizedFileHandler
 
+STATIC_PATTERNS = [
+    r'/(fonts/.*)', r'/(img/.*)', r'/(css/.*)',
+    r'/(js/.*)', r'/(favicon\.ico)', r'/(.+.json)']
+
 # Built-in Query String Parsers
-def _default_parser(query_args):
+def _default_parser(request):
+    query_args = request.query_arguments
     args = {}
     for key, vals in query_args.iteritems():
         if len(vals) != 1:
@@ -22,55 +27,37 @@ def _default_parser(query_args):
         args[key] = vals[0]
     return args
 
-def _object_parser(query_args):
-    args = {}
-    for key, vals in query_args.iteritems():
-        parsed = []
-        for v in vals:
-            if v:
-                parsed += v.split(',')
-        args[key] = parsed
-    return args
-
 class RestAPI:
-    def __init__(self, server_mgr, enable_cors):
+    def __init__(self, server_mgr, server_config):
         self.server_mgr = server_mgr
-        self.web_path = web_path = server_mgr.web_path
-        self.sd_path = sd_path = server_mgr.sd_path
+        web_path = server_config.get('web_path')
+        enable_cors = server_config.get("enable_cors", False)
 
         mimetypes.add_type('text/plain', '.log')
         mimetypes.add_type('text/plain', '.gcode')
 
-        self.tornado_app = tornado.web.Application([
-            # Printer File management
-            (r'/printer/log()', PrinterFileHandler,
+        self.request_handlers = {
+            'KlippyRequestHandler': KlippyRequestHandler,
+            'FileRequestHandler': FileRequestHandler,
+            'FileUploadHandler': FileUploadHandler,
+            'TokenRequestHandler': TokenRequestHandler}
+
+        app_handlers = [
+            (r'/printer/klippy_server.log()', FileRequestHandler,
              {'server_manager': server_mgr,
-              'allow_delete': False, 'path': "/tmp/klippy.log"}),
-            (r'/printer/files/upload', FileUploadHandler,
-             {'server_manager': server_mgr}),
-            (r'/api/files/local', FileUploadHandler,
-             {'server_manager': server_mgr}),
-            (r'/printer/files/(.*)', PrinterFileHandler,
-             {'server_manager': server_mgr, 'path': sd_path}),
+              'methods': ['GET'], 'path': "/tmp/klippy_server.log"}),
             (r'/api/version', EmulateOctoprintHandler,
-             {'server_manager': server_mgr}),
-            # Access Control
-            (r'/access/api_key', APIKeyRequestHandler,
-             {'server_manager': server_mgr}),
-            (r'/access/oneshot_token', TokenRequestHandler,
-             {'server_manager': server_mgr}),
-            # Static Files
-            (r'/(fonts/.*)', AuthorizedFileHandler,
-             {'server_manager': server_mgr, 'path': web_path}),
-            (r'/(img/.*)', AuthorizedFileHandler,
-             {'server_manager': server_mgr, 'path': web_path}),
-            (r'/(css/.*)', AuthorizedFileHandler,
-             {'server_manager': server_mgr, 'path': web_path}),
-            (r'/(js/.*)', AuthorizedFileHandler,
-             {'server_manager': server_mgr, 'path': web_path}),
-            (r'/(favicon\.ico)', AuthorizedFileHandler,
-             {'server_manager': server_mgr, 'path': web_path}),
-            (r'/[^/]*', IndexHandler, {'server_manager': server_mgr})],
+             {'server_manager': server_mgr})]
+
+        # Add support for static endpoints
+        for p in STATIC_PATTERNS:
+            params = {'server_manager': server_mgr, 'path': web_path}
+            app_handlers.append((p, AuthorizedFileHandler, params))
+        app_handlers.append(
+            (r'/[^/]*', IndexHandler, {'server_manager': server_mgr}))
+
+        self.tornado_app = tornado.web.Application(
+            app_handlers,
             template_path=web_path,
             serve_traceback=DEBUG,
             websocket_ping_interval=10,
@@ -88,33 +75,29 @@ class RestAPI:
             (r'/websocket', WebSocket, {'server_manager': self.server_mgr})
         ]
 
-        for (path, methods, parser) in hooks:
-            arg_parser = self._get_parser(parser)
-            params = {
-                'server_manager': self.server_mgr,
-                'methods': methods,
-                'arg_parser': arg_parser}
-            handlers.append((path, KlippyRequestHandler, params))
+        for (pattern, methods, params) in hooks:
+            request_type = params.pop('handler', 'KlippyRequestHandler')
+            request_hdlr = self.request_handlers.get(request_type)
+            hdlr_params = dict(params)
+            if request_hdlr is not None:
+                hdlr_params['server_manager'] = self.server_mgr
+                if request_type == "KlippyRequestHandler":
+                    # Base Klippy Requests require additional params
+                    hdlr_params['methods'] = methods
+                    params.setdefault('arg_parser', _default_parser)
+                elif request_type == "FileRequestHandler":
+                    hdlr_params['methods'] = methods
+                    hdlr_params['pattern'] = pattern
+                handlers.append((pattern, request_hdlr, hdlr_params))
         self.tornado_app.add_handlers(r'.*', handlers)
-
-    def _get_parser(self, arg_parser):
-        if callable(arg_parser):
-            return arg_parser
-
-        if arg_parser.lower() == "object":
-            return _object_parser
-        else:
-            return _default_parser
 
 class IndexHandler(AuthorizedRequestHandler):
     def get(self):
         self.render("index.html")
 
 class KlippyRequestHandler(AuthorizedRequestHandler):
-    def initialize(self, server_manager, methods, arg_parser,
-                   always_allow=False):
-        super(KlippyRequestHandler, self).initialize(
-            server_manager, always_allow)
+    def initialize(self, server_manager, methods, arg_parser):
+        super(KlippyRequestHandler, self).initialize(server_manager)
         self.methods = methods
         self.query_parser = arg_parser
 
@@ -133,10 +116,17 @@ class KlippyRequestHandler(AuthorizedRequestHandler):
             raise tornado.web.HTTPError(405)
 
     @gen.coroutine
+    def delete(self):
+        if 'DELETE' in self.methods:
+            yield self._process_http_request('DELETE')
+        else:
+            raise tornado.web.HTTPError(405)
+
+    @gen.coroutine
     def _process_http_request(self, method):
         args = {}
         if self.request.query:
-            args = self.query_parser(self.request.query_arguments)
+            args = self.query_parser(self.request)
         request = self.manager.make_request(
             self.request.path, method, args)
         result = yield request.wait()
@@ -145,26 +135,13 @@ class KlippyRequestHandler(AuthorizedRequestHandler):
                 result.status_code, result.message)
         self.finish({'result': result})
 
-class PrinterFileHandler(AuthorizedFileHandler):
-    def initialize(self, server_manager, path, allow_delete=True,
-                   default_filename=None):
-        super(PrinterFileHandler, self).initialize(
+class FileRequestHandler(AuthorizedFileHandler):
+    def initialize(self, server_manager, path, methods,
+                   pattern=None, default_filename=None):
+        super(FileRequestHandler, self).initialize(
             server_manager, path, default_filename)
-        self.allow_delete = allow_delete
-
-    def validate_absolute_path(self, root, absolute_path, check_delete=False):
-        # Validate that we arent printing
-        filename = None
-        if check_delete:
-            # Get the base file name so we can check against the
-            # currently loaded file
-            filename = os.path.basename(absolute_path)
-        msg = self.manager.check_file_operation(filename)
-        if msg:
-            raise tornado.web.HTTPError(503, msg)
-
-        return super(PrinterFileHandler, self).validate_absolute_path(
-            root, absolute_path)
+        self.methods = methods
+        self.main_pattern = pattern
 
     def set_extra_headers(self, path):
         # The call below shold never return an empty string,
@@ -174,8 +151,9 @@ class PrinterFileHandler(AuthorizedFileHandler):
         self.set_header(
             "Content-Disposition", "attachment; filename=%s" % (basename))
 
+    @gen.coroutine
     def delete(self, path):
-        if not self.allow_delete:
+        if 'DELETE' not in self.methods:
             raise tornado.web.HTTPError(405)
 
         # Use the same method Tornado uses to validate the path
@@ -183,9 +161,16 @@ class PrinterFileHandler(AuthorizedFileHandler):
         del path  # make sure we don't refer to path instead of self.path again
         absolute_path = self.get_absolute_path(self.root, self.path)
         self.absolute_path = self.validate_absolute_path(
-            self.root, absolute_path, True)
-        if self.absolute_path is None:
-            return
+            self.root, absolute_path)
+
+        # Make sure the file isn't currently loaded
+        request = self.manager.make_request(
+            self.main_pattern, self.request.method,
+            {'filename': self.absolute_path})
+        result = yield request.wait()
+        if isinstance(result, ServerError):
+            raise tornado.web.HTTPError(
+                503, "File is loaded, DELETE not permitted")
 
         os.remove(self.absolute_path)
         filename = os.path.basename(self.absolute_path)
@@ -193,23 +178,36 @@ class PrinterFileHandler(AuthorizedFileHandler):
         self.finish({'result': filename})
 
 class FileUploadHandler(AuthorizedRequestHandler):
+    def initialize(self, server_manager, path):
+        super(FileUploadHandler, self).initialize(server_manager)
+        self.file_path = path
+
     @gen.coroutine
     def post(self):
-        start_after_upload = False
+        start_print = False
         print_args = self.request.arguments.get('print', [])
         if print_args:
-            start_after_upload = print_args[0].lower() == "true"
+            start_print = print_args[0].lower() == "true"
         upload = self.get_file()
         filename = "_".join(upload['filename'].strip().split())
-        msg = self.manager.check_file_operation(filename)
-        if msg:
-            raise tornado.web.HTTPError(503, msg)
+        full_path = os.path.join(self.file_path, filename)
+        # Make sure the file isn't currently loaded
+        request = self.manager.make_request(
+            self.request.path, self.request.method,
+            {'filename': full_path})
+        result = yield request.wait()
+        if isinstance(result, ServerError):
+            raise tornado.web.HTTPError(
+                503, "File is loaded, upload not permitted")
+        # Don't start if a print is currently in progress
+        start_print = start_print and not result['print_ongoing']
         try:
-            self.copy_file(filename, upload['body'])
+            with open(full_path, 'wb') as fh:
+                fh.write(upload['body'])
             self.manager.notify_filelist_changed(filename, 'added')
         except Exception:
             raise tornado.web.HTTPError(500, "Unable to save file")
-        if start_after_upload:
+        if start_print:
             # Make a Klippy Request to "Start Print"
             request = self.manager.make_request(
                 "/printer/print/start", 'POST', {'filename': filename})
@@ -217,7 +215,7 @@ class FileUploadHandler(AuthorizedRequestHandler):
             if isinstance(result, ServerError):
                 raise tornado.web.HTTPError(
                     result.status_code, result.message)
-        self.finish({'result': filename, 'print_started': start_after_upload})
+        self.finish({'result': filename, 'print_started': start_print})
 
     def get_file(self):
         # File uploads must have a single file request
@@ -229,20 +227,6 @@ class FileUploadHandler(AuthorizedRequestHandler):
             raise tornado.web.HTTPError(
                 400, "Bad Request, can only process a single file upload")
         return f_list[0]
-
-    def copy_file(self, filename, data):
-        destination = os.path.join(self.manager.sd_path, filename)
-        with open(destination, 'wb') as fh:
-            fh.write(data)
-
-class APIKeyRequestHandler(AuthorizedRequestHandler):
-    def get(self):
-        api_key = self.auth_manager.get_api_key()
-        self.finish({'result': api_key})
-
-    def post(self):
-        api_key = self.auth_manager.generate_api_key()
-        self.finish({'result': api_key})
 
 class TokenRequestHandler(AuthorizedRequestHandler):
     def get(self):
