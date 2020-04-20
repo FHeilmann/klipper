@@ -5,7 +5,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license
 import logging
 
-AVAILABLE_METHODS = ['GET', 'POST']
+AVAILABLE_METHODS = ['GET', 'POST', 'DELETE']
 
 class WebHooksError(Exception):
     pass
@@ -15,8 +15,7 @@ class WebHooks:
         self._endpoints = {}
         self._hooks = []
 
-    def register_endpoint(self, path, callback, methods=['GET'],
-                          arg_parser="default"):
+    def register_endpoint(self, path, callback, methods=['GET'], params={}):
         if path in self._endpoints:
             raise WebHooksError("Path already registered to an endpoint")
 
@@ -28,7 +27,7 @@ class WebHooks:
                     % (method, path))
 
         self._endpoints[path] = callback
-        self._hooks.append((path, methods, arg_parser))
+        self._hooks.append((path, methods, params))
 
     def get_hooks(self):
         return (list(self._hooks))
