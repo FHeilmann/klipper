@@ -3,10 +3,12 @@
 # Copyright (C) 2020 Eric Callahan <arksine.code@gmail.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+import util
 import re
 import os
 import time
 import logging
+import multiprocessing
 
 def strip_quotes(string):
     quotes = string[0] + string[-1]
@@ -149,10 +151,6 @@ class GcodeAnalysis:
                         f.seek(-fsize, os.SEEK_END)
                     file_data += f.read()
                 metadata.update(slicer.parse_metadata(file_data, file_path))
-            else:
-                logging.info(
-                    "Unable to detect Slicer Template for file '%s'"
-                    % (file_path))
         return metadata
 
     def update_metadata(self, file_path, metadata):
@@ -163,15 +161,51 @@ class GcodeAnalysis:
         if metadata.get('size', 0) == size and \
                 metadata.get('modified', '') == last_modified:
             # File has not changed
-            logging.debug(
-                "gcode_meta: No changes detected to file '%s',"
-                " using current metadata" % (file_path))
             return metadata
         return self.get_metadata(file_path)
+
+def _find_files(path):
+    file_names = []
+    for fname in os.listdir(path):
+        if fname[0] == '.':
+            continue
+        full_path = os.path.join(path, fname)
+        if os.path.isdir(full_path):
+            sublist = _find_files(full_path)
+            for sf in sublist:
+                file_names.append(os.path.join(fname, sf))
+        elif os.path.isfile(full_path):
+            ext = fname[fname.rfind('.')+1:]
+            if ext in VALID_GCODE_EXTS:
+                file_names.append(fname)
+    return file_names
+
+def _update_file_list(kpipe, prev_info, sdpath, gca):
+    file_info = {}
+    try:
+        file_names = _find_files(sdpath)
+    except Exception:
+        kpipe.send((False, "file_manager: unable to generate file list"))
+        file_names = {}
+    for fname in file_names:
+        fpath = os.path.join(sdpath, fname)
+        metadata = prev_info.get(fname, {})
+        try:
+            file_info[fname] = gca.update_metadata(
+                fpath, metadata)
+        except Exception as e:
+            kpipe.send((False, "file_manager: " + str(e)))
+            continue
+        if 'slicer' not in file_info[fname] and not metadata:
+            msg = "file_manager: Unable to detect Slicer " \
+                "Template for file '%s'" % (fpath)
+            kpipe.send((False, msg))
+    kpipe.send((True, file_info))
 
 class FileManager:
     def __init__(self, config):
         self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
         self.gca = GcodeAnalysis(config)
         sd = config.get('path', None)
@@ -179,11 +213,17 @@ class FileManager:
             vsdcfg = config.getsection('virtual_sdcard')
             sd = vsdcfg.get('path')
         self.sd_path = os.path.normpath(os.path.expanduser(sd))
-        self.file_info = None
-        self.gcode.register_command(
-            "GET_FILE_LIST", self.cmd_GET_FILE_LIST,
-            desc=self.cmd_GET_FILE_LIST_help)
+
+        # Multiprocessing management
+        self.file_req_mutex = self.reactor.mutex()
+        self.file_req_pipe = None
+        self.file_req_comp = None
+
+        # initialize file list
+        self.file_info = {}
         self._update_file_list()
+
+        # Register Webhooks
         webhooks = self.printer.lookup_object('webhooks')
         webhooks.register_endpoint(
             "/printer/files", self._handle_remote_filelist_request)
@@ -198,6 +238,11 @@ class FileManager:
             "/printer/files/(.*)", self._handle_remote_file_request,
             methods=['GET', 'DELETE'],
             params={'handler': 'FileRequestHandler', 'path': self.sd_path})
+
+        # Register Gcode
+        self.gcode.register_command(
+            "GET_FILE_LIST", self.cmd_GET_FILE_LIST,
+            desc=self.cmd_GET_FILE_LIST_help)
 
     def _handle_remote_filelist_request(self, web_request):
         try:
@@ -232,59 +277,58 @@ class FileManager:
     def get_sd_directory(self):
         return self.sd_path
 
+    def _process_file_proc_response(self, eventtime):
+        try:
+            done, result = self.file_req_pipe.recv()
+        except Exception:
+            logging.exception("file_manager: error receiving file list")
+
+        if not done:
+            # result should be a string for logging
+            logging.info(result)
+        elif self.file_req_comp is not None:
+            # result is the dictionary
+            self.file_req_comp.complete(result)
+
     def _update_file_list(self):
-        file_names = self._get_file_names(self.sd_path)
-        if self.file_info is None:
-            self.file_info = {}
-            for fname in file_names:
-                fpath = os.path.join(self.sd_path, fname)
-                try:
-                    self.file_info[fname] = self.gca.get_metadata(fpath)
-                except Exception:
-                    logging.exception("FileManager: File Detection Error")
-        else:
-            new_file_info = {}
-            for fname in file_names:
-                fpath = os.path.join(self.sd_path, fname)
-                metadata = self.file_info.get(fname, None)
-                try:
-                    if metadata is not None:
-                        new_file_info[fname] = self.gca.update_metadata(
-                            fpath, metadata)
-                    else:
-                        new_file_info[fname] = self.gca.get_metadata(fpath)
-                except Exception:
-                    logging.exception("FileManager: File Detection Error")
-            self.file_info = new_file_info
+        with self.file_req_mutex:
+            ppipe, cpipe = multiprocessing.Pipe()
+            util.set_nonblock(ppipe.fileno())
+            self.file_req_pipe = ppipe
+            fd_hdlr = self.reactor.register_fd(
+                ppipe.fileno(), self._process_file_proc_response)
+            self.file_req_comp = self.reactor.completion()
+            proc = multiprocessing.Process(
+                target=_update_file_list,
+                args=(cpipe, self.file_info, self.sd_path, self.gca))
+            proc.start()
+            waketime = self.reactor.monotonic() + 2.
+            res = self.file_req_comp.wait(waketime=waketime)
+            if res is None:
+                # completion timed out
+                logging.info("file_manager: File list request timed out")
+                self.file_info = {}
+            else:
+                self.file_info = res
+            # Give process a chance to terminate
+            curtime = self.reactor.monotonic()
+            endtime = curtime + 1.
+            while curtime < endtime:
+                if not proc.is_alive():
+                    break
+                curtime = self.reactor.pause(curtime + .01)
+            else:
+                logging.info("file_manager: Process still alive, terminating")
+                proc.terminate()
+            self.reactor.unregister_fd(fd_hdlr)
+            ppipe.close()
+            self.file_req_pipe.close()
+            self.file_req_pipe = None
+            self.file_req_comp = None
 
     def get_file_list(self):
         self._update_file_list()
         return dict(self.file_info)
-
-    def _get_file_names(self, path):
-        file_names = []
-        try:
-            for fname in os.listdir(path):
-                if fname[0] == '.':
-                    continue
-                full_path = os.path.join(path, fname)
-                if os.path.isdir(full_path):
-                    sublist = self._get_file_names(full_path)
-                    for sf in sublist:
-                        file_names.append(os.path.join(fname, sf))
-                elif os.path.isfile(full_path):
-                    ext = fname[fname.rfind('.')+1:]
-                    if ext in VALID_GCODE_EXTS:
-                        file_names.append(fname)
-        except Exception:
-            msg = "FileManager: unable to generate file list"
-            logging.exception(msg)
-            if self.file_info is None:
-                # File Info not initialized, error occured during config
-                raise self.printer.config_error(msg)
-            else:
-                raise self.gcode.error(msg)
-        return file_names
 
     cmd_GET_FILE_LIST_help = "Show Detailed GCode File Information"
     def cmd_GET_FILE_LIST(self, params):
