@@ -20,7 +20,7 @@ class KlippyServerInterface:
         is_fileoutput = (self.printer.get_start_args().get('debugoutput')
                          is not None)
         self.printer.try_load_module(config, "pause_resume")
-        self.server_pipe = self.server_proc = None
+        self.server_pipe = self.server_proc = self.pipe_handler = None
         self.status_hdlr = StatusHandler(
             config, self.send_notification)
 
@@ -50,7 +50,7 @@ class KlippyServerInterface:
             pipe, proc = load_server_process(server_config)
             self.server_pipe = pipe
             self.server_proc = proc
-            self.reactor.register_fd(
+            self.pipe_handler = self.reactor.register_fd(
                 pipe.fileno(), self._process_server_request)
             self.printer.register_event_handler(
                 "klippy:post_config", self._register_hooks)
@@ -148,6 +148,11 @@ class KlippyServerInterface:
         self._handle_klippy_state("disconnect")
         self.server_send('shutdown')
         self.server_proc.join()
+        if self.pipe_handler is not None:
+            self.reactor.unregister_fd(self.pipe_handler)
+            self.pipe_handler = None
+        if self.server_pipe is not None:
+            self.server_pipe.close()
 
     def _handle_klippy_state(self, state):
         self.send_notification('klippy_state_changed', state)
