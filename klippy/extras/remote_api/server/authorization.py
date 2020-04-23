@@ -14,7 +14,7 @@ TOKEN_TIMEOUT = 5
 CONNECTION_TIMEOUT = 3600
 PRUNE_CHECK_TIME = 300 * 1000
 
-class AuthManager:
+class Authorization:
     def __init__(self, config):
         self.api_key = config.get('api_key')
         self.auth_enabled = config.get("require_auth", True)
@@ -26,7 +26,7 @@ class AuthManager:
             self._prune_conn_handler, PRUNE_CHECK_TIME)
         self.prune_handler.start()
         logging.info(
-            "[WEBSERVER]: Authorization Plugin Initialized\n"
+            "Authorization Plugin Initialized\n"
             "Auth Enabled: %s\n"
             "Trusted IPs:\n%s\n"
             "Trusted IP Ranges:\n%s" %
@@ -43,7 +43,7 @@ class AuthManager:
         for ip in expired_conns:
             self.trusted_connections.pop(ip)
             logging.info(
-                "[WEBSERVER]: Trusted Connection Expired, IP: %s" % (ip))
+                "Trusted Connection Expired, IP: %s" % (ip))
 
     def _token_expire_handler(self, token):
         self.access_tokens.pop(token)
@@ -66,7 +66,7 @@ class AuthManager:
             elif ip in self.trusted_ips or \
                     ip[:ip.rfind('.')] in self.trusted_ranges:
                 logging.info(
-                    "[WEBSERVER]: Trusted Connection Detected, IP: %s"
+                    "Trusted Connection Detected, IP: %s"
                     % (ip))
                 self.trusted_connections[ip] = time.time()
                 return True
@@ -105,12 +105,12 @@ class AuthManager:
         self.prune_handler.stop()
 
 class AuthorizedRequestHandler(tornado.web.RequestHandler):
-    def initialize(self, server_manager):
+    def initialize(self, server_manager, auth):
         self.manager = server_manager
-        self.auth_manager = server_manager.auth_manager
+        self.auth = auth
 
     def prepare(self):
-        if not self.auth_manager.check_authorized(self.request):
+        if not self.auth.check_authorized(self.request):
             raise tornado.web.HTTPError(401, "Unauthorized")
 
     def set_default_headers(self):
@@ -135,13 +135,13 @@ class AuthorizedRequestHandler(tornado.web.RequestHandler):
 # Due to the way Python treats multiple inheritance its best
 # to create a separate authorized handler for serving files
 class AuthorizedFileHandler(tornado.web.StaticFileHandler):
-    def initialize(self, server_manager, path, default_filename=None):
+    def initialize(self, server_manager, auth, path, default_filename=None):
         super(AuthorizedFileHandler, self).initialize(path, default_filename)
         self.manager = server_manager
-        self.auth_manager = server_manager.auth_manager
+        self.auth = auth
 
     def prepare(self):
-        if not self.auth_manager.check_authorized(self.request):
+        if not self.auth.check_authorized(self.request):
             raise tornado.web.HTTPError(401, "Unauthorized")
 
     def set_default_headers(self):

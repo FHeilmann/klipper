@@ -1,3 +1,43 @@
+### Version .05-alpha - 04/23/2020
+- The `[web_server]` module has been renamed to `[remote_api]`.  Please update
+  printer.cfg accordingly
+- Static files no longer served by the API server.  As a result, there is
+  no `web_path` option in `[remote_api]`.
+- The server process now now forwards logging requests back to the Klippy
+  Host, thus all logging is done in klippy.log.  The temporary endpoint serving
+  klippy_server.log has been removed.
+- `/printer/info` now includes two additional keys:
+  - `error_detected` - Boolean value set to true if a host error has been
+    detected
+  - `message` - The current Klippy State message.  If an error is detected this
+    message may be presented to the user.  This is the same message returned
+    when by the STATUS gcode.
+- The server process is now launched immediately after the config file is read.
+  This allows the client limited access to Klippy in the event of a startup
+  error, assuming the config file was successfully parsed and the
+  `remote_api` configuration section is valid. Note that when the server is
+  initally launched not all endpoints will be available.  The following
+  endponts are guaranteed when the server is launched:
+  - `/websocket`
+  - `/printer/info`
+  - `/printer/restart`
+  - `/printer/firmware_restart`
+  - `/printer/log`
+  - `/printer/gcode`
+  - `/access/api_key`
+  - `/access/oneshot_token`
+  The following startup sequence is recommened for clients which make use of
+  the websocket:
+  - Attempt to connect to `/websocket` until successful
+  - Once connected, query `/printer/info` for the ready status.  If not ready
+    check `error_detected`.  If not ready and no error, continue querying on
+    a timer until the printer is either ready or an error is detected.
+  - After the printer has identified itself as ready make subscription requests,
+    get the current file list, etc
+  - If the websocket disconnects the client can assume that the server is shutdown.
+    It should consider the printer's state to be NOT ready and try reconnecting to
+    the websocket until successful.
+
 ### Version .04-alpha - 04/20/2020
 - Add `/printer/gcode/help` endpoint to gcode.py
 - Allow the clients to fetch .json files in the root web directory

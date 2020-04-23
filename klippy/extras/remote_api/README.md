@@ -1,4 +1,4 @@
-# Klippy Webserver
+# Klippy Remote API
 
 ## Overview
 
@@ -64,28 +64,24 @@ changes made outside of the `web_server` folder:
 - `virtual_sdcard.py` has been updated to track and report more data about
   an ongoing print.
 
-A default web_server on port 80 that grants authorization to local clients
-on the IP range 192.168.1.0 can be configured as follows in printer.cfg:
+A default remote_api configuration on port 7000 that grants authorization to
+local clients on the IP range 192.168.1.0 can be configured as follows in
+printer.cfg:
 ```
-[web_server]
-port: 80
+[remote_api]
+port: 7000
 trusted_clients:
  192.168.1.0/24
 ```
 
 Below is a detailed explanation of all options currently available:
 ```
-#[web_server]
+#[remote_api]
 #host: 0.0.0.0
 #  The host IP to bind the server to.  Defaults to 0.0.0.0, which
 #  listens on all available interfaces.
 #port: 7125
 #  The port to listen on.  Defaults to 7125
-#web_path:
-#  The location of the static files to serve.  This will
-#  likely be removed in the release as it is expected that
-#  static files will be served by NGINX or another http server.
-#  The current default is the ./www folder.
 #api_key_path: ~
 #  The path to store the API Key.  Defaults to the user's home directory.
 #  The file name is `.klippy_api_key`, this cannot be changed.
@@ -174,6 +170,20 @@ ws://host:port/websocket?token=<32 character base32 string>
 This is necessary as it isn't currently possible to add `X-Api-Key` to a
 websocket's request header.
 
+The following startup sequence is recommened for clients which make use of
+the websocket:
+  - Attempt to connect to `/websocket` until successful using a timer-like
+    mechanism
+  - Once connected, query `/printer/info` (or `get_printer_info`) for the ready
+    status.  If not ready check `error_detected`.  If not ready and no error,
+    continue querying on a timer until the printer is either ready or an error
+    is detected.
+  - After the printer has identified itself as ready make subscription requests,
+    get the current file list, etc
+  - If the websocket disconnects the client can assume that the server is shutdown.
+    It should consider the printer's state to be NOT ready and try reconnecting to
+    the websocket until successful, repeating the above steps.
+
 ## API
 
 Most API methods are supported over both the Websocket and HTTP.  File
@@ -215,8 +225,9 @@ uses promises to return responses and errors (see json-rc.js).
   process is ready for operation.  The latter is useful when a client connects
   after the klippy state event has been broadcast.
 
-  `{version: "<version>", cpu: "<cpu_info>", is_ready: <klippy_ready>,
-    hostname: <hostname>}`
+  `{version: "<version>", cpu: "<cpu_info>", is_ready: <boolean>,
+    hostname: "<hostname>", error_detected: <boolean>,
+    message: "<current state message>"}`
 
 
 ### Request available printer objects and their attributes:

@@ -46,7 +46,7 @@ function update_streamdiv(obj, attr, val) {
         $('#streamdiv').append("<div id='sdrow" + stream_div_height +
                                "' style='display: flex'></div>");
     }
-    let id = obj + "_" + attr;
+    let id = obj.replace(/\s/g, "_") + "_" + attr;
     if ($("#" + id).length == 0) {
         $('#sdrow' + stream_div_height).append("<div style='width: 10em; border: 2px solid black'>"
             + obj + " " + attr + ":<div id='" + id + "'></div></div>");
@@ -128,9 +128,11 @@ function get_klippy_info() {
         if (result.is_ready) {
             if (!klippy_ready) {
                 klippy_ready = true;
-                // We know the host is ready, subscribed if configured.
-                // If we aren't configured to subscribe on ready, initialize
-                // the printer state and paused state
+                // Klippy has transitioned from not ready to ready.
+                // It is now safe to fetch the file list.
+                get_file_list();
+
+                // Add our subscriptions the the UI is configured to do so.
                 if ($("#cbxSub").is(":checked")) {
                     // If autosubscribe is check, request the subscription now
                     const sub = {
@@ -550,17 +552,16 @@ window.onload = () => {
     let prefix = window.location.protocol == "https" ? "wss://" : "ws://";
     let ws = new KlippyWebsocket(prefix + location.host);
     ws.onopen = () => {
-        // Go ahead and do some initialization, the commands below
-        // do not need Klippy to be "ready" to return valid info. It
-        // isn't necesary to do the request over the websocket, you
-        // could just as easily send HTTP GET requests here for the
-        // klippy info and the file list.
+        // Depending on the state of the printer, all enpoints may not be
+        // available when the websocket is first opened.  The "get_klippy_info"
+        // method is available, and should be used to determine if Klipper is
+        // in the "ready" state.  When Klipper is "ready", all endpoints should
+        // be registered and available.
 
         // These could be implemented JSON RPC Batch requests and send both
         // at the same time, however it is easier to simply do them
         // individually
         get_klippy_info();
-        get_file_list();
     };
     json_rpc.register_transport(ws);
 

@@ -7,6 +7,7 @@
 import logging
 import tornado
 from tornado import gen
+from tornado.ioloop import IOLoop
 from tornado.websocket import WebSocketHandler
 from tornado.concurrent import Future
 from server_util import ServerError, json_encode, json_loads_byteified
@@ -25,7 +26,7 @@ class JsonRPC:
             request = json_loads_byteified(data)
         except Exception:
             msg = "Websocket data not json: %s" % (str(data))
-            logging.exception("[WEBSERVER]: " + msg)
+            logging.exception(msg)
             response = self.build_error(-32700, "Parse error")
             raise gen.Return(json_encode(response))
         if isinstance(request, list):
@@ -105,12 +106,10 @@ class WebsocketManager:
         self.ws_lock = tornado.locks.Lock()
         self.rpc = JsonRPC()
 
-    def register_api_hooks(self, hooks):
-        for (path, methods, params) in hooks:
-            request_type = params.get('handler', "KlippyRequestHandler")
-            if request_type != "KlippyRequestHandler":
-                # Websocket on supports basic Klippy Requests
-                continue
+    def register_api_hook(self, path, methods, params):
+        request_type = params.get('handler', "KlippyRequestHandler")
+        if request_type == "KlippyRequestHandler":
+            # Websocket only supports basic Klippy Requests
             for method in methods:
                 # Format the endpoint into something more json friendly
                 cmd = method.lower() + path.replace('/', '_')
@@ -132,14 +131,14 @@ class WebsocketManager:
     def add_websocket(self, ws):
         with (yield self.ws_lock.acquire()):
             self.websockets[ws.uid] = ws
-            logging.info("[WEBSERVER]: New Websocket Added: %d" % ws.uid)
+            logging.info("New Websocket Added: %d" % ws.uid)
 
     @gen.coroutine
     def remove_websocket(self, ws):
         with (yield self.ws_lock.acquire()):
             old_ws = self.websockets.pop(ws.uid, None)
             if old_ws is not None:
-                logging.info("[WEBSERVER]: Websocket Removed: %d" % ws.uid)
+                logging.info("Websocket Removed: %d" % ws.uid)
 
     @gen.coroutine
     def send_all_websockets(self, data):
@@ -149,7 +148,7 @@ class WebsocketManager:
                     ws.write_message(data)
                 except Exception:
                     logging.exception(
-                        "[WEBSERVER]: Error sending data over websocket")
+                        "Error sending data over websocket")
 
     @gen.coroutine
     def close(self):
@@ -159,14 +158,15 @@ class WebsocketManager:
             self.websockets = {}
 
 class WebSocket(WebSocketHandler):
-    def initialize(self, server_manager):
-        self.ws_manager = server_manager.ws_manager
-        self.auth_manager = server_manager.auth_manager
+    def initialize(self, ws_manager, auth):
+        self.ws_manager = ws_manager
+        self.auth = auth
         self.rpc = self.ws_manager.rpc
         self.uid = id(self)
 
+    @gen.coroutine
     def open(self):
-        self.ws_manager.add_websocket(self)
+        yield self.ws_manager.add_websocket(self)
 
     @gen.coroutine
     def on_message(self, message):
@@ -175,10 +175,11 @@ class WebSocket(WebSocketHandler):
             if response is not None:
                 self.write_message(response)
         except Exception:
-            logging.exception("[WEBSERVER]: Websocket Command Error")
+            logging.exception("Websocket Command Error")
 
     def on_close(self):
-        self.ws_manager.remove_websocket(self)
+        io_loop = IOLoop.current()
+        io_loop.spawn_callback(self.ws_manager.remove_websocket, self)
 
     def check_origin(self, origin):
         if self.settings['enable_cors']:
@@ -189,5 +190,5 @@ class WebSocket(WebSocketHandler):
 
     # Check Authorized User
     def prepare(self):
-        if not self.auth_manager.check_authorized(self.request):
+        if not self.auth.check_authorized(self.request):
             raise tornado.web.HTTPError(401, "Unauthorized")

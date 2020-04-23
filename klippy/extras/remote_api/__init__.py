@@ -1,5 +1,5 @@
 
-# Package definition for Klippy Web Server
+# Package definition for Klippy Remote API
 #
 # Copyright (C) 2020 Eric Callahan <arksine.code@gmail.com>
 #

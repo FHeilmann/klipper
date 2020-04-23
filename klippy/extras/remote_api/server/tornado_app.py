@@ -10,14 +10,14 @@ import logging
 import tornado
 from tornado import gen
 from server_util import DEBUG, ServerError
-from ws_manager import WebSocket
+from ws_manager import WebsocketManager, WebSocket
 from authorization import AuthorizedRequestHandler, AuthorizedFileHandler
+from authorization import Authorization
 
-STATIC_PATTERNS = [
-    r'/(fonts/.*)', r'/(img/.*)', r'/(css/.*)',
-    r'/(js/.*)', r'/(favicon\.ico)', r'/(.+.json)']
+# Max Upload Size of 200MB
+MAX_UPLOAD_SIZE = 200 * 1024 * 1024
 
-# Built-in Query String Parsers
+# Built-in Query String Parser
 def _default_parser(request):
     query_args = request.query_arguments
     args = {}
@@ -27,11 +27,18 @@ def _default_parser(request):
         args[key] = vals[0]
     return args
 
-class RestAPI:
+class TornadoApp:
     def __init__(self, server_mgr, server_config):
         self.server_mgr = server_mgr
-        web_path = server_config.get('web_path')
-        enable_cors = server_config.get("enable_cors", False)
+        self.tornado_server = None
+        self.registered_hooks = []
+        enable_cors = server_config.get('enable_cors', False)
+        initial_hooks = server_config.get('initial_hooks', [])
+
+        # Set Up Websocket and Authorization Managers
+        self.websocket_manager = WebsocketManager(server_mgr)
+        self.send_all_websockets = self.websocket_manager.send_all_websockets
+        self.auth = Authorization(server_config)
 
         mimetypes.add_type('text/plain', '.log')
         mimetypes.add_type('text/plain', '.gcode')
@@ -43,44 +50,50 @@ class RestAPI:
             'TokenRequestHandler': TokenRequestHandler}
 
         app_handlers = [
-            (r'/printer/klippy_server.log()', FileRequestHandler,
-             {'server_manager': server_mgr,
-              'methods': ['GET'], 'path': "/tmp/klippy_server.log"}),
+            (r'/websocket', WebSocket,
+             {'ws_manager': self.websocket_manager, 'auth': self.auth}),
             (r'/api/version', EmulateOctoprintHandler,
-             {'server_manager': server_mgr})]
+             {'server_manager': server_mgr, 'auth': self.auth})]
+        app_handlers += self.prepare_handlers(initial_hooks)
 
-        # Add support for static endpoints
-        for p in STATIC_PATTERNS:
-            params = {'server_manager': server_mgr, 'path': web_path}
-            app_handlers.append((p, AuthorizedFileHandler, params))
-        app_handlers.append(
-            (r'/[^/]*', IndexHandler, {'server_manager': server_mgr}))
-
-        self.tornado_app = tornado.web.Application(
+        self.app = tornado.web.Application(
             app_handlers,
-            template_path=web_path,
             serve_traceback=DEBUG,
             websocket_ping_interval=10,
             websocket_ping_timeout=30,
             enable_cors=enable_cors)
 
-    def get_app(self):
-        return self.tornado_app
+    def listen(self, host, port):
+        self.tornado_server = self.app.listen(
+            port, address=host, max_body_size=MAX_UPLOAD_SIZE,
+            xheaders=True)
+
+    @gen.coroutine
+    def close(self):
+        if self.tornado_server is not None:
+            self.tornado_server.stop()
+        yield self.websocket_manager.close()
+        self.auth.close()
 
     def register_api_hooks(self, hooks):
-        # add the websocket handler here as well.  We don't
-        # want it available before the hooks are applied
-        # to the websocket
-        handlers = [
-            (r'/websocket', WebSocket, {'server_manager': self.server_mgr})
-        ]
+        handlers = self.prepare_handlers(hooks)
+        self.app.add_handlers(r'.*', handlers)
 
+    def prepare_handlers(self, hooks):
+        handlers = []
         for (pattern, methods, params) in hooks:
+            if pattern in self.registered_hooks:
+                # Don't allow multiple hooks
+                continue
+            self.registered_hooks.append(pattern)
+            self.websocket_manager.register_api_hook(
+                pattern, methods, params)
             request_type = params.pop('handler', 'KlippyRequestHandler')
             request_hdlr = self.request_handlers.get(request_type)
             hdlr_params = dict(params)
             if request_hdlr is not None:
                 hdlr_params['server_manager'] = self.server_mgr
+                hdlr_params['auth'] = self.auth
                 if request_type == "KlippyRequestHandler":
                     # Base Klippy Requests require additional params
                     hdlr_params['methods'] = methods
@@ -89,15 +102,11 @@ class RestAPI:
                     hdlr_params['methods'] = methods
                     hdlr_params['pattern'] = pattern
                 handlers.append((pattern, request_hdlr, hdlr_params))
-        self.tornado_app.add_handlers(r'.*', handlers)
-
-class IndexHandler(AuthorizedRequestHandler):
-    def get(self):
-        self.render("index.html")
+        return handlers
 
 class KlippyRequestHandler(AuthorizedRequestHandler):
-    def initialize(self, server_manager, methods, arg_parser):
-        super(KlippyRequestHandler, self).initialize(server_manager)
+    def initialize(self, server_manager, auth, methods, arg_parser):
+        super(KlippyRequestHandler, self).initialize(server_manager, auth)
         self.methods = methods
         self.query_parser = arg_parser
 
@@ -136,10 +145,10 @@ class KlippyRequestHandler(AuthorizedRequestHandler):
         self.finish({'result': result})
 
 class FileRequestHandler(AuthorizedFileHandler):
-    def initialize(self, server_manager, path, methods,
+    def initialize(self, server_manager, auth, path, methods,
                    pattern=None, default_filename=None):
         super(FileRequestHandler, self).initialize(
-            server_manager, path, default_filename)
+            server_manager, auth, path, default_filename)
         self.methods = methods
         self.main_pattern = pattern
 
@@ -178,8 +187,8 @@ class FileRequestHandler(AuthorizedFileHandler):
         self.finish({'result': filename})
 
 class FileUploadHandler(AuthorizedRequestHandler):
-    def initialize(self, server_manager, path):
-        super(FileUploadHandler, self).initialize(server_manager)
+    def initialize(self, server_manager, auth, path):
+        super(FileUploadHandler, self).initialize(server_manager, auth)
         self.file_path = path
 
     @gen.coroutine
@@ -230,7 +239,7 @@ class FileUploadHandler(AuthorizedRequestHandler):
 
 class TokenRequestHandler(AuthorizedRequestHandler):
     def get(self):
-        token = self.auth_manager.get_access_token()
+        token = self.auth.get_access_token()
         self.finish({'result': token})
 
 class EmulateOctoprintHandler(AuthorizedRequestHandler):
