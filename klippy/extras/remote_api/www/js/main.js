@@ -855,4 +855,28 @@ window.onload = () => {
         let gcodes = result.trim().split(',');
         send_gcode_macro(gcodes);
     });
+
+    $('#btnreboot').click(() => {
+        if (api_type == 'http') {
+            let url = "/machine/reboot";
+            $.post(url, (resp, status) => {
+                console.log(resp);
+                return false;
+            });
+        } else {
+            json_rpc.notify('post_machine_reboot');
+        }
+    });
+
+    $('#btnshutdown').click(() => {
+        if (api_type == 'http') {
+            let url = "/machine/shutdown";
+            $.post(url, (resp, status) => {
+                console.log(resp);
+                return false;
+            });
+        } else {
+            json_rpc.notify('post_machine_shutdown');
+        }
+    });
 };

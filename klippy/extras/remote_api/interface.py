@@ -25,6 +25,11 @@ class KlippyServerInterface:
         self.status_hdlr = StatusHandler(
             config, self.send_notification)
 
+        # Get shell commands
+        shell_command = self.printer.try_load_module(config, 'shell_command')
+        self.reboot = shell_command.load_shell_command('sudo reboot now')
+        self.shutdown = shell_command.load_shell_command('sudo shutdown now')
+
         # Get API Key
         key_path = os.path.normpath(
             os.path.expanduser(config.get('api_key_path', '~')))
@@ -43,6 +48,13 @@ class KlippyServerInterface:
         self.webhooks.register_endpoint(
             '/access/oneshot_token', None,
             params={'handler': 'TokenRequestHandler'})
+        self.webhooks.register_endpoint(
+            '/machine/reboot', self._handle_machine_request,
+            methods=['POST'])
+        self.webhooks.register_endpoint(
+            '/machine/shutdown', self._handle_machine_request,
+            methods=['POST'])
+
 
         # Load Server Config
         server_config = self._load_server_config(config)
@@ -174,6 +186,14 @@ class KlippyServerInterface:
             # POST requests generate and return a new API Key
             self.api_key = self._create_api_key()
         web_request.send(self.api_key)
+
+    def _handle_machine_request(self, web_request):
+        path = web_request.get_path()
+        if path == "/machine/shutdown":
+            self.shutdown.run(timeout=None, verbose=False)
+        elif path == "/machine/reboot":
+            self.reboot.run(timeout=None, verbose=False)
+        raise web_request.error("Unsupported machine request")
 
     def _process_server_request(self, eventtime):
         try:
