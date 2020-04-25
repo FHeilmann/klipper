@@ -168,8 +168,12 @@ class WebSocket(WebSocketHandler):
     def open(self):
         yield self.ws_manager.add_websocket(self)
 
-    @gen.coroutine
     def on_message(self, message):
+        io_loop = IOLoop.current()
+        io_loop.spawn_callback(self._process_message, message)
+
+    @gen.coroutine
+    def _process_message(self, message):
         try:
             response = yield self.rpc.dispatch(message)
             if response is not None:
