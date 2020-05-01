@@ -10,7 +10,7 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 from tornado.websocket import WebSocketHandler
 from tornado.concurrent import Future
-from server_util import ServerError, json_encode, json_loads_byteified
+from server_util import ServerError, json_encode, json_loads_byteified, DEBUG
 
 class JsonRPC:
     def __init__(self):
@@ -29,6 +29,8 @@ class JsonRPC:
             logging.exception(msg)
             response = self.build_error(-32700, "Parse error")
             raise gen.Return(json_encode(response))
+        if DEBUG:
+            logging.info("Websocket Request::" + data)
         if isinstance(request, list):
             response = []
             for req in request:
