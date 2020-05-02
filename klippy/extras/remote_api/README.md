@@ -34,7 +34,7 @@ Otherwise you will need to manually install them:
 
 You may notice that aside from the addition of the web_server extra, other
 changes were made to support its additon. Below is a detailed list of the
-changes made outside of the `web_server` folder:
+changes made outside of the `remote_api` folder:
 - `webhooks.py` has been added.  This module allows other host modules to
   host modules to register endpoints without trying to load the web_server
   module
@@ -187,8 +187,9 @@ the websocket:
 ## API
 
 Most API methods are supported over both the Websocket and HTTP.  File
-Transfer and adminstrative API methods are available only over HTTP. The
-Websocket is required to receive printer generated events.
+Transfer and the "oneshot_token" request are only available over HTTP. The
+Websocket is required to receive printer generated events such as gcode
+responses.
 
 Note that all HTTP responses are returned as a json encoded object in the form of:
 
@@ -386,6 +387,20 @@ uses promises to return responses and errors (see json-rc.js).
 - Returns:\
   `ok`
 
+### Fetch stored temperature data
+- HTTP command:\
+  `GET /printer/temperature_store`
+
+- Websocket command:
+  `{jsonrpc: "2.0", method: "get_printer_temperature_store", id: <request id>}`
+
+- Returns:\
+  An object where the keys are the available temperature sensor names, and with
+  the value being an array of stored temperatures.  The array is updated every
+  1 second by default, containing a total of 1200 values (20 minutes).  The
+  array is organized from oldest temperature to most recent (left to right).
+  Note that when the host starts each array is initialized to 0s.
+
 ### Restart the host
 - HTTP command:\
   `POST /printer/restart`
@@ -481,7 +496,7 @@ the currrent file list.  It cannot be used to download, upload, or delete files.
   `GET /printer/endstops`
 
 - Websocket command:\
-- `{jsonrpc: "2.0", method: "get_printer_endstops", id: <request id>}`
+  `{jsonrpc: "2.0", method: "get_printer_endstops", id: <request id>}`
 
 - Returns:\
   An object containing the current endstop state, with each attribute in the
@@ -498,12 +513,14 @@ the currrent file list.  It cannot be used to download, upload, or delete files.
 
 Untrusted Clients must use a key to access the API by including it in the
 `X-Api-Key` header for each HTTP Request.  The API below allows authorized
-clients to receive and change the current API Key.  Note that there is
-no websocket API for these functions, they must be done via HTTP.
+clients to receive and change the current API Key.
 
 ### Get the Current API Key
 - HTTP command:\
   `GET /access/api_key`
+
+- Websocket command:\
+  `{jsonrpc: "2.0", method: "get_access_api_key", id: <request id>}`
 
 - Returns:\
   The current API key
@@ -511,6 +528,9 @@ no websocket API for these functions, they must be done via HTTP.
 ### Generate a New API Key
 - HTTP command:\
   `POST /access/api_key`
+
+- Websocket command:\
+  `{jsonrpc: "2.0", method: "post_access_api_key", id: <request id>}`
 
 - Returns:\
   The newly generated API key.  This overwrites the previous key.  Note that
@@ -527,10 +547,38 @@ only be used once, making them relatively for inclusion in the query string.
 - HTTP command:\
   `GET /access/oneshot_token`
 
+- Websocket command:
+  Not available
+
 - Returns:\
   A temporary token that may be added to a requests query string for access
   to any API endpoint.  The query string should be added in the form of:
   `?token=randomly_generated_token`
+
+## Machine Operations
+
+Machine operations are specific linux commands allowed to be run from the
+Klippy host.
+
+### Shutdown the machine
+- HTTP command:\
+  `POST /machine/shutdown`
+
+- Websocket command:\
+  `{jsonrpc: "2.0", method: "post_machine_shutdown", id: <request id>}`
+
+- Returns:\
+  No return value as the server will shut down upon execution
+
+### Reboot the machine
+- HTTP command:\
+  `POST /machine/reboot`
+
+- Websocket command:\
+  `{jsonrpc: "2.0", method: "post_machine_reboot", id: <request id>}`
+
+- Returns:\
+  No return value as the server will shut down upon execution
 
 ## Websocket notifications
 Printer generated events are sent over the websocket as JSON-RPC 2.0
@@ -589,11 +637,10 @@ is the name of the file the action was performed on, and the `filelist` is the c
 file list, returned in the same format as `get_file_list`.
 
 ## Communication between Klippy and the Web Server
-In this implementation the Web Server runs in the Klipper Process on
-its own thread.  The Server sends requests to Klippy via the reactor,
-using the "register_async_callback" method.  The server is able to send
-responses back to the server via Tornado's IOLoop.addCallback method.
-The host uses the same method for pushing notifications to the server
+The server is run in its own process using Python's multiprocessing module.
+Communication is done over a duplex pipe, ie a pair of "Connection" objects.
+The host registers the pipe's file descriptor with the Reactor for non-blocking
+reads.  Likewise the server registers its end of the pipe with Tornado's IOLoop.
 
 ## Todo:
 - [X] Handle print requests.  Either use the virutal_sdcard, or have the
@@ -608,13 +655,13 @@ The host uses the same method for pushing notifications to the server
 - [X] Add "register_url" support, where Klippy extra modules can register a
       callback to be executed when an endpoint is accessed.  The request
       should also be registered with the websocket API
-- [ ] If possible, look into solutions that start the server with a few initial
+- [X] If possible, look into solutions that start the server with a few initial
       endpoints registered prior to the configuration being read in klippy.py.
       This would allow clients to connect and issue restart/firmware_restart
       commands in the event that the configuration is invalid.
 - [X] Explore solutions for issue where the pty buffer gets full, resulting in errors
       logged each time the pty is written to.
-- [ ] Check to see if its possible to unload a virtual SD Card file.  Pausing
+- [X] Check to see if its possible to unload a virtual SD Card file.  Pausing
       and resetting the file position to 0 works when canceled, but the ideal
       solution would be to unload the file.
 - [X] Add events for pause and resume.  Its possible that the printer could be
@@ -623,4 +670,4 @@ The host uses the same method for pushing notifications to the server
       and update itself accordingly, however it would be better to receive this
       via an event.
 - [ ] Support Klippy configuration from web clients
-- [X] Update Klipper's install script to include eventlet and bottle deps
+- [X] Update Klipper's install script to include tornado deps

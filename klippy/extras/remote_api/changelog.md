@@ -1,3 +1,13 @@
+### Version .06-alpha - TBD
+- Add `/machine/reboot` and `/machine/shutdown` endpoints.  These may be used
+  to reboot or shutdown the host machine
+- Fix issue where websocket was blocked on long transactions, resulting in the
+  connection being closed
+- Log all client requests over the websocket
+- Add `/printer/temperature_store` endpoint.  Clients may use this to fetch
+  stored temperature data.  By default the store for each temperature sensor
+  is updated every 1s, with the store holding 20 minutes of data.
+
 ### Version .05-alpha - 04/23/2020
 - The `[web_server]` module has been renamed to `[remote_api]`.  Please update
   printer.cfg accordingly
