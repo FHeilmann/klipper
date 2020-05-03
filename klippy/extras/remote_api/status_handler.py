@@ -5,9 +5,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license
 import re
 import logging
-from collections import deque
 
-TEMP_STORE_SIZE = 20 * 60
 MAX_TICKS = 64
 
 # Status objects require special parsing
@@ -30,7 +28,6 @@ class StatusHandler:
         self.reactor = self.printer.get_reactor()
         self.tick_time = config.getfloat('tick_time', .25, above=0.)
         self.current_tick = 0
-        self.temperature_store = {}
         self.available_objects = {}
         self.subscriptions = []
         self.subscription_timer = self.reactor.register_timer(
@@ -61,8 +58,6 @@ class StatusHandler:
                     # gcode_macros are blacklisted
                     continue
                 self.poll_ticks[name] = ticks
-        # Override temperature ticks to be 1 second
-        self.temperature_ticks = max(1, int(1. / self.tick_time + .5))
 
         # Register webhooks
         webhooks = self.printer.lookup_object('webhooks')
@@ -74,32 +69,27 @@ class StatusHandler:
         webhooks.register_endpoint(
             '/printer/subscriptions', self._handle_subscription_request,
             ['GET', 'POST'], {'arg_parser': _status_parser})
-        webhooks.register_endpoint(
-            '/printer/temperature_store', self._handle_temp_store_request)
 
-    def handle_ready(self):
+    def initialize(self):
         self.available_objects = {}
         avail_sensors = []
+        eventtime = self.reactor.monotonic()
         objs = self.printer.lookup_objects()
         status_objs = {n: o for n, o in objs if hasattr(o, "get_status")}
-        eventtime = self.reactor.monotonic()
         for name, obj in status_objs.iteritems():
             attrs = obj.get_status(eventtime)
             self.available_objects[name] = attrs.keys()
             if name == "heaters":
                 avail_sensors = attrs['available_sensors']
 
-        # Setup temperature store
-        subs = {}
-        for sensor in avail_sensors:
-            if sensor in self.available_objects:
-                self.temperature_store[sensor] = deque(
-                    [0]*TEMP_STORE_SIZE, maxlen=TEMP_STORE_SIZE)
-                self.poll_ticks[sensor] = self.temperature_ticks
-                subs[sensor] = []
-        # Subscribe to available sensors now
-        self.add_subscripton(subs)
+        # Create a subscription for available temperature sensors
+        # that have a "get_status" method
+        t_sensor_subs = {s: [] for s in avail_sensors
+                         if s in self.available_objects}
+
+        self.add_subscripton(t_sensor_subs, init=True)
         self.printer_ready = True
+        return t_sensor_subs.keys()
 
     def _batch_subscription_handler(self, eventtime):
         # self.subscriptions is a 2D array, with the inner array
@@ -116,11 +106,6 @@ class StatusHandler:
 
         if current_subs:
             status = self._process_status_request(current_subs)
-            # Chech the temperature store
-            if not self.current_tick % self.temperature_ticks:
-                for sensor in self.temperature_store:
-                    self.temperature_store[sensor].append(
-                        round(status[sensor]['temperature'], 2))
             self.send_notification('status_update', status)
 
         self.current_tick = (self.current_tick + 1) % MAX_TICKS
@@ -173,10 +158,6 @@ class StatusHandler:
             result = self.get_sub_info()
             web_request.send(result)
 
-    def _handle_temp_store_request(self, web_request):
-        store = {s: list(t) for s, t in self.temperature_store.iteritems()}
-        web_request.send(store)
-
     def stop(self):
         self.printer_ready = False
         self.reactor.update_timer(self.subscription_timer, self.reactor.NEVER)
@@ -207,7 +188,7 @@ class StatusHandler:
                 return sub
         return None
 
-    def add_subscripton(self, new_sub):
+    def add_subscripton(self, new_sub, init=False):
         if not new_sub:
             return
         for obj in new_sub:
@@ -228,4 +209,8 @@ class StatusHandler:
                 self.subscriptions.append([req, poll_ticks])
 
         waketime = self.reactor.monotonic() + self.tick_time
+        if init:
+            # Add one second to the initial to give all sensors a chance to
+            # update
+            waketime += 1.
         self.reactor.update_timer(self.subscription_timer, waketime)

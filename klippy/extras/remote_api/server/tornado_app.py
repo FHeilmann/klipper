@@ -53,6 +53,8 @@ class TornadoApp:
             (r'/websocket', WebSocket,
              {'ws_manager': self.websocket_manager, 'auth': self.auth}),
             (r'/api/version', EmulateOctoprintHandler,
+             {'server_manager': server_mgr, 'auth': self.auth}),
+            (r'/printer/temperature_store', TemperatureStoreHandler,
              {'server_manager': server_mgr, 'auth': self.auth})]
         app_handlers += self.prepare_handlers(initial_hooks)
 
@@ -248,3 +250,8 @@ class EmulateOctoprintHandler(AuthorizedRequestHandler):
             'server': "1.1.1",
             'api': "0.1",
             'text': "OctoPrint Upload Emulator"})
+
+class TemperatureStoreHandler(AuthorizedRequestHandler):
+    def get(self):
+        t_store = self.manager.get_temperature_store()
+        self.finish({'result': t_store})

@@ -155,7 +155,9 @@ class KlippyServerInterface:
         return server_config
 
     def _handle_ready(self):
-        self.status_hdlr.handle_ready()
+        sensors = self.status_hdlr.initialize()
+        config = {'available_sensors': sensors}
+        self.server_send('load_config', config)
         self._handle_klippy_state("ready")
 
     def _handle_disconnect(self):

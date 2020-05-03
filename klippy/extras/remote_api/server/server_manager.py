@@ -13,13 +13,18 @@ from tornado.util import TimeoutError
 from tornado.locks import Event
 from server_util import ServerError, json_encode
 from tornado_app import TornadoApp
+from collections import deque
 
+# XXX - REMOVE PROCESS_CHECK_MS
 PROCESS_CHECK_MS = 100
+TEMPERATURE_UPDATE_MS = 1000
+TEMPERATURE_STORE_SIZE = 20 * 60
 
 class ServerManager:
     def __init__(self, pipe, config):
         self.host = config.get('host', '0.0.0.0')
         self.port = config.get('port', 7125)
+        # XXX - REMOVE parent_pid
         self.parent_pid = config.get('parent_pid')
         # Setup command timeouts
         self.request_timeout = config.get('request_timeout', 5.)
@@ -31,10 +36,21 @@ class ServerManager:
         self.process_check_cb = None
         self.io_loop = IOLoop.current()
 
+        # Temperature Store Tracking
+        self.last_temps = {}
+        self.temperature_store = {}
+        self.temp_update_cb = PeriodicCallback(
+            self._update_temperature_store, TEMPERATURE_UPDATE_MS)
+
+        # XXX - REMOVE process_check_cb
+        self.process_check_cb = PeriodicCallback(
+            self._check_parent_proc, PROCESS_CHECK_MS)
+
         # Setup host/server callbacks
         self.events = {}
         self.server_callbacks = {
             'register_hooks': self._register_webhooks,
+            'load_config': self._load_config,
             'response': self._handle_klippy_response,
             'notification': self._handle_notification,
             'shutdown': self._handle_shutdown_request,
@@ -56,12 +72,26 @@ class ServerManager:
         self.io_loop.add_handler(
             self.klippy_pipe.fileno(), self._handle_klippy_data,
             IOLoop.READ)
-        self.process_check_cb = PeriodicCallback(
-            self._check_parent_proc, PROCESS_CHECK_MS)
+        # XXX - REMOVE process_check_cb.start()
         self.process_check_cb.start()
+        self.temp_update_cb.start()
         self.io_loop.start()
         self.io_loop.close(True)
         logging.info("Server Shutdown")
+
+    def _load_config(self, config):
+        # TODO: Check new config against current config and restart
+        # if necessary
+        avail_sensors = config.get('available_sensors', [])
+        new_store = {}
+        for sensor in avail_sensors:
+            if sensor in self.temperature_store:
+                new_store[sensor] = self.temperature_store[sensor]
+            else:
+                new_store[sensor] = {
+                    'temperatures': deque(maxlen=TEMPERATURE_STORE_SIZE),
+                    'targets': deque(maxlen=TEMPERATURE_STORE_SIZE)}
+        self.temperature_store = new_store
 
     def _handle_klippy_data(self, fd, events):
         try:
@@ -73,6 +103,8 @@ class ServerManager:
             cb(*args)
 
     def _check_parent_proc(self):
+        # TODO:  This won't be necessary and can be removed when process is
+        # in its own daemon
         # Looks hacky, but does not actually kill the parent process
         try:
             os.kill(self.parent_pid, 0)
@@ -124,8 +156,30 @@ class ServerManager:
                   'filelist': filelist}
         yield self._process_notification('filelist_changed', result)
 
+    def get_temperature_store(self):
+        store = {}
+        for name, sensor in self.temperature_store.iteritems():
+            store[name] = {k: list(v) for k, v in sensor.iteritems()}
+        return store
+
+    def _update_temperature_store(self):
+        # XXX - If klippy is not connected, set values to zero
+        # as they are unknown
+        for sensor, (temp, target) in self.last_temps.iteritems():
+            self.temperature_store[sensor]['temperatures'].append(temp)
+            self.temperature_store[sensor]['targets'].append(target)
+
+    def _record_last_temp(self, data):
+        for sensor in self.temperature_store:
+            if sensor in data:
+                self.last_temps[sensor] = (
+                    round(data[sensor].get('temperature', 0.), 2),
+                    data[sensor].get('target', 0.))
+
     @gen.coroutine
     def _process_notification(self, name, data):
+        if name == 'status_update':
+            self._record_last_temp(data)
         # Send Event Over Websocket in JSON-RPC 2.0 format.
         resp = json_encode({
             'jsonrpc': "2.0",
@@ -138,6 +192,7 @@ class ServerManager:
         logging.info(
             "Shutting Down Webserver")
         self.process_check_cb.stop()
+        self.temp_update_cb.stop()
         if self.server_running:
             self.server_running = False
             yield self.tornado_app.close()
