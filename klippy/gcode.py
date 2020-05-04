@@ -97,6 +97,11 @@ class GCodeParser:
         webhooks.register_endpoint(
             '/printer/gcode', self.run_script_from_remote,
             methods=['POST'])
+        webhooks.register_endpoint(
+            '/printer/restart', self._handle_remote_restart, methods=['POST'])
+        webhooks.register_endpoint(
+            '/printer/firmware_restart', self._handle_remote_restart,
+            methods=['POST'])
         # Command handling
         self.is_printer_ready = False
         self.mutex = self.reactor.mutex()
@@ -357,6 +362,13 @@ class GCodeParser:
                                                       self._process_data)
     def _handle_remote_help(self, web_request):
         web_request.send(dict(self.gcode_help))
+    def _handle_remote_restart(self, web_request):
+        path = web_request.get_path()
+        if path == '/printer/restart':
+            web_request.put('script', 'restart')
+        elif path == '/printer/firmware_restart':
+            web_request.put('script', 'firmware_restart')
+        self.run_script_from_remote(web_request)
     def run_script_from_remote(self, web_request):
         script = web_request.get('script')
         if 'M112' in script.upper():

@@ -63,12 +63,7 @@ class Printer:
             {'gcode': gc, 'webhooks': web_hooks})
         # Register Printer Endpoints
         web_hooks.register_endpoint(
-            '/printer/info', self._handle_web_request)
-        web_hooks.register_endpoint(
-            '/printer/restart', self._handle_web_request, methods=['POST'])
-        web_hooks.register_endpoint(
-            '/printer/firmware_restart', self._handle_web_request,
-            methods=['POST'])
+            '/printer/info', self._handle_info_request)
         # Endpoint for log file, does not require a handler
         log_file = start_args.get('log_file')
         if log_file is not None:
@@ -151,25 +146,17 @@ class Printer:
             m.add_printer_objects(config)
         # Validate that there are no undefined parameters in the config file
         pconfig.check_unused_options(config)
-    def _handle_web_request(self, web_request):
-        path = web_request.get_path()
-        if path == '/printer/info':
-            version = self.start_args['software_version']
-            cpu_info = self.start_args['cpu_info']
-            error = self.state_message != message_startup and \
-                self.state_message != message_ready
-            web_request.send(
-                {'cpu': cpu_info, 'version': version,
-                 'hostname': socket.gethostname(),
-                 'is_ready': self.state_message == message_ready,
-                 'error_detected': error,
-                 'message': self.state_message})
-        elif path == '/printer/restart':
-            self.request_exit('restart')
-        elif path == '/printer/firmware_restart':
-            self.request_exit('firmware_restart')
-        else:
-            raise web_request.error("Invalid Web Path '%s'" % path)
+    def _handle_info_request(self, web_request):
+        version = self.start_args['software_version']
+        cpu_info = self.start_args['cpu_info']
+        error = self.state_message != message_startup and \
+            self.state_message != message_ready
+        web_request.send(
+            {'cpu': cpu_info, 'version': version,
+                'hostname': socket.gethostname(),
+                'is_ready': self.state_message == message_ready,
+                'error_detected': error,
+                'message': self.state_message})
     def _connect(self, eventtime):
         try:
             self._read_config()
