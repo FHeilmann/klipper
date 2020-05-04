@@ -30,6 +30,15 @@ class ServerManager:
         self.request_timeout = config.get('request_timeout', 5.)
         self.long_running_gcodes = config.get('long_running_gcodes')
         self.long_running_requests = config.get('long_running_requests')
+
+        # Add Server side hooks to initial hooks
+        self.local_hooks = {
+            "/printer/temperature_store": self._handle_temp_store_request}
+        config.setdefault('initial_hooks', []).append(
+            ("/printer/temperature_store", ['GET'],
+             {'handler': "ServerRequestHandler"}))
+
+        # Server/IOLoop
         self.server_running = False
         self.tornado_app = TornadoApp(self, config)
         self.klippy_pipe = pipe
@@ -127,6 +136,14 @@ class ServerManager:
     def _handle_shutdown_request(self):
         self.io_loop.spawn_callback(self._kill_server)
 
+    def make_local_request(self, path, method, args):
+        cb = self.local_hooks.get(path)
+        if cb is not None:
+            base_request = BaseRequest(path, method, args)
+            return cb(base_request)
+        else:
+            return ServerError("No registered callback for path '%s" % path)
+
     def make_request(self, path, method, args):
         timeout = self.long_running_requests.get(
             path, self.request_timeout)
@@ -156,7 +173,7 @@ class ServerManager:
                   'filelist': filelist}
         yield self._process_notification('filelist_changed', result)
 
-    def get_temperature_store(self):
+    def _handle_temp_store_request(self, web_request):
         store = {}
         for name, sensor in self.temperature_store.iteritems():
             store[name] = {k: list(v) for k, v in sensor.iteritems()}

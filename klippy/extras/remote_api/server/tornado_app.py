@@ -47,14 +47,13 @@ class TornadoApp:
             'KlippyRequestHandler': KlippyRequestHandler,
             'FileRequestHandler': FileRequestHandler,
             'FileUploadHandler': FileUploadHandler,
-            'TokenRequestHandler': TokenRequestHandler}
+            'TokenRequestHandler': TokenRequestHandler,
+            'ServerRequestHandler': ServerRequestHandler}
 
         app_handlers = [
             (r'/websocket', WebSocket,
              {'ws_manager': self.websocket_manager, 'auth': self.auth}),
             (r'/api/version', EmulateOctoprintHandler,
-             {'server_manager': server_mgr, 'auth': self.auth}),
-            (r'/printer/temperature_store', TemperatureStoreHandler,
              {'server_manager': server_mgr, 'auth': self.auth})]
         app_handlers += self.prepare_handlers(initial_hooks)
 
@@ -251,7 +250,11 @@ class EmulateOctoprintHandler(AuthorizedRequestHandler):
             'api': "0.1",
             'text': "OctoPrint Upload Emulator"})
 
-class TemperatureStoreHandler(AuthorizedRequestHandler):
+class ServerRequestHandler(AuthorizedRequestHandler):
     def get(self):
-        t_store = self.manager.get_temperature_store()
-        self.finish({'result': t_store})
+        args = {}
+        if self.request.query:
+            args = _default_parser(self.request)
+        result = self.manager.make_local_request(
+            self.request.path, 'GET', args)
+        self.finish({'result': result})

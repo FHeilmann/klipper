@@ -624,9 +624,21 @@ window.onload = () => {
                 if (args.startsWith("{")) {
                     args = JSON.parse(args);
                 }
-                json_rpc.call_method(method, args);
+                json_rpc.call_method_with_kwargs(method, args)
+                .then((result) => {
+                    console.log(result);
+                })
+                .catch((error) => {
+                    update_error(method, error);
+                });
             } else {
-                json_rpc.call_method(method);
+                json_rpc.call_method(method)
+                .then((result) => {
+                    console.log(result);
+                })
+                .catch((error) => {
+                    update_error(method, error);
+                });
             }
         }
         return false;

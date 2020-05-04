@@ -110,20 +110,28 @@ class WebsocketManager:
 
     def register_api_hook(self, path, methods, params):
         request_type = params.get('handler', "KlippyRequestHandler")
-        if request_type == "KlippyRequestHandler":
+        if request_type in ["KlippyRequestHandler", "ServerRequestHandler"]:
             # Websocket only supports basic Klippy Requests
             for method in methods:
                 # Format the endpoint into something more json friendly
                 cmd = method.lower() + path.replace('/', '_')
-                rpc_cb = self._generate_callback(path, method)
+                rpc_cb = self._generate_callback(path, method, request_type)
                 self.rpc.register_method(cmd, rpc_cb)
 
-    def _generate_callback(self, path, method):
-        @gen.coroutine
-        def func(**kwargs):
-            request = self.server_mgr.make_request(path, method, kwargs)
-            result = yield request.wait()
-            raise gen.Return(result)
+    def _generate_callback(self, path, method, request_type):
+        if request_type == "ServerRequestHandler":
+            def func(**kwargs):
+                ft = Future()
+                result = self.server_mgr.make_local_request(
+                    path, method, kwargs)
+                ft.set_result(result)
+                return ft
+        else:
+            @gen.coroutine
+            def func(**kwargs):
+                request = self.server_mgr.make_request(path, method, kwargs)
+                result = yield request.wait()
+                raise gen.Return(result)
         return func
 
     def has_websocket(self, ws_id):
