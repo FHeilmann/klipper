@@ -206,7 +206,6 @@ class FileManager:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
-        self.gcode = self.printer.lookup_object('gcode')
         self.gca = GcodeAnalysis(config)
         sd = config.get('path', None)
         if sd is None:
@@ -240,7 +239,8 @@ class FileManager:
             params={'handler': 'FileRequestHandler', 'path': self.sd_path})
 
         # Register Gcode
-        self.gcode.register_command(
+        gcode = self.printer.lookup_object('gcode')
+        gcode.register_command(
             "GET_FILE_LIST", self.cmd_GET_FILE_LIST,
             desc=self.cmd_GET_FILE_LIST_help)
 
@@ -331,7 +331,7 @@ class FileManager:
         return dict(self.file_info)
 
     cmd_GET_FILE_LIST_help = "Show Detailed GCode File Information"
-    def cmd_GET_FILE_LIST(self, params):
+    def cmd_GET_FILE_LIST(self, gcmd):
         self._update_file_list()
         msg = "Available GCode Files:\n"
         for fname in sorted(self.file_info, key=str.lower):
@@ -339,7 +339,7 @@ class FileManager:
             for item in sorted(self.file_info[fname], key=str.lower):
                 msg += "** %s: %s\n" % (item, str(self.file_info[fname][item]))
             msg += "\n"
-        self.gcode.respond_info(msg)
+        gcmd.respond_info(msg)
 
 def load_config(config):
     return FileManager(config)
