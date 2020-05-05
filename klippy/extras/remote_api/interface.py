@@ -17,7 +17,6 @@ class KlippyServerInterface:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
-        self.gcode = self.printer.lookup_object('gcode')
         self.webhooks = self.printer.lookup_object('webhooks')
         is_fileoutput = (self.printer.get_start_args().get('debugoutput')
                          is not None)
@@ -37,7 +36,8 @@ class KlippyServerInterface:
         self.api_key = self._read_api_key()
 
         # Register GCode
-        self.gcode.register_command(
+        gcode = self.printer.lookup_object('gcode')
+        gcode.register_command(
             "GET_API_KEY", self.cmd_GET_API_KEY,
             desc=self.cmd_GET_API_KEY_help)
 
@@ -242,8 +242,8 @@ class KlippyServerInterface:
         return api_key
 
     cmd_GET_API_KEY_help = "Print webserver API key to terminal"
-    def cmd_GET_API_KEY(self, params):
-        self.gcode.respond_info(
+    def cmd_GET_API_KEY(self, gcmd):
+        gcmd.respond_info(
             "Curent Webserver API Key: %s" % (self.api_key), log=False)
 
 class Sentinel:
