@@ -8,6 +8,7 @@ import JsonRPC from "./json-rpc.js?v=0.1.2";
 
 var paused = false;
 var klippy_ready = false;
+var display_klippy_info = true;
 var api_type = 'http';
 var is_printing = false;
 var json_rpc = new JsonRPC();
@@ -122,10 +123,16 @@ function get_klippy_info() {
     // If the Host is in a "ready" state, we can do some initialization
     json_rpc.call_method('get_printer_info')
     .then((result) => {
-        update_term("Klippy Hostname: " + result.hostname +
-                " | CPU: " + result.cpu +
-                " | Build Version: " + result.version);
+        if (display_klippy_info) {
+            display_klippy_info = false;
+            update_term("Klippy Hostname: " + result.hostname +
+                    " | CPU: " + result.cpu +
+                    " | Build Version: " + result.version);
+        } else {
+            update_term("Waiting for Klippy ready status...")
+        }
         if (result.is_ready) {
+            display_klippy_info = true;
             if (!klippy_ready) {
                 klippy_ready = true;
                 // Klippy has transitioned from not ready to ready.
@@ -403,7 +410,10 @@ function handle_klippy_state(state) {
             // cleanup on the client to prepare for restart this would
             // be a good place.
             klippy_ready = false;
-            update_term("Klippy Disconnected, Preparing for Restart");
+            update_term("Klippy Disconnected");
+            setTimeout(() => {
+                get_klippy_info();
+            }, 2000);
             break;
         case "shutdown":
             // Either M112 was entered or there was a printer error.  We
@@ -781,7 +791,7 @@ window.onload = () => {
 
     $('#btngetlog').click(() => {
         if (api_type == 'http') {
-            let url = "http://" + location.host + "/printer/log";
+            let url = "http://" + location.host + "/printer/klippy.log";
             $('#hidden_link').attr('href', url);
             $('#hidden_link')[0].click();
         } else {
@@ -817,7 +827,7 @@ window.onload = () => {
     $('#btnsubscribe').click(() => {
         if (api_type == 'http') {
             const suburl = "/printer/subscriptions?gcode=gcode_position,speed,speed_factor,extrude_factor" +
-                    "&toolhead&virtual_sdcard&heater_bed&extruder=temperature,target&fan&idle_timeout%pause_resume";
+                    "&toolhead&virtual_sdcard&heater_bed&extruder=temperature,target&fan&idle_timeout&pause_resume";
             $.post(suburl, (data, status) => {
                 console.log(data);
             });

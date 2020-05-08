@@ -1,87 +1,125 @@
-# Klippy Remote API
+# Moonraker - Klippy Remote API Server
 
 ## Overview
 
-The Klippy Webserver exposes an API that can be used by web applications to
-interact with Klipper.  This implementation runs within Klippy on its own
-thread. It depends on Tornado's for the Server, Websocket, and framework.
+Moonraker exposes an API that can be used by web applications to
+interact with Klipper.  This implementation runs outside of Klippy
+as its own process.  Communcation between Klippy and the Server is
+done over a Unix Domain Socket.
+
+Moonraker's only additional dependency is Tornado.
+
 ## Installation
 
-Add the following remote to your Klipper git repo:
-```
-git remote add arksine https://github.com/Arksine/klipper.git
-```
-Now fetch and checkout:
-```
-git fetch arksine
-git checkout arksine/work-web_server-20200131
-```
-Note that you are now in a detached head state and you cannot pull. Any
-time you want to update to the latest version of this branch you must
-repeat the two commands above.
+- Add the following remote to your Klipper git repo:
+  ```
+  cd ~/klipper
+  git remote add arksine https://github.com/Arksine/klipper.git
+  ```
+- Now fetch and checkout:
+  ```
+  git fetch arksine
+  git checkout arksine/work-web_server-20200131
+  ```
+  Note that you are now in a detached head state and you cannot pull. Any
+  time you want to update to the latest version of this branch you must
+  repeat the two commands above.
 
-If you want to switch back to the main repo:
-```
-git checkout master
-```
+  For reference, if you want to switch back to the clone of the official repo:
+  ```
+  git checkout master
+  ```
+  Note that the above is NOT part of the Moonraker install procedure.
 
-If you are doing a fresh Klipper install from the web server branch, all
-of the web server's dependencies will be added when you run install-octopi.sh.
-Otherwise you will need to manually install them:
-```
-~/klippy-env/bin/pip install tornado
-```
+- If you are updating from a previous version of this branch, now is a good
+  time to clean the repo using `git clean`.  First, do a dry run to see what
+  will be deleted:
+  ```
+  cd ~/klipper
+  sudo service klipper stop
+  git clean -x -d -n
+  ```
+  It is particularly important to make sure the old `remote_api` and `web_server`
+  directories are removed.  If you are ok with everything else listed (will
+  mostly be *.pyc files), the following command will remove them:
+  ```
+  git clean -x -d
+  ```
+  It is also possible to use interactive mode and choose which files you want to
+  remove:
+  ```
+  git clean -x -d -i
+  ```
 
-You may notice that aside from the addition of the web_server extra, other
-changes were made to support its additon. Below is a detailed list of the
-changes made outside of the `remote_api` folder:
-- `webhooks.py` has been added.  This module allows other host modules to
-  host modules to register endpoints without trying to load the web_server
-  module
-- The following changes have been made to `klippy.py`:
-  - The webhooks module is instantiated on printer initialization
-  - The following endpoints are registered and handled:
-    - /printer/info
-    - /printer/restart
-    - /printer/firmware_restart
-  - A "klippy:post_config" event is broadcast immediately after the config
-    has been read, before the unused option check.  The server uses this
-    event to register all webhooks.
-- The following changes have been made to `gcode.py`:
-  - The webhooks module is passed into the GCodeParser's constructor. The
-    the "/printer/gcode" endpoint is registered and handled by the GCodeParser
-    class.
-  - A "gcode:respond" event has been added.  The server uses this event to
-    broadcast gcode responses over all connected websockets
-  - When a write is performed on the pty, the exception handler now checks
-    for errno 11 (resource not available).  If this error is found
-    termios.tcflush is called to flush the output buffer.  This prevents
-    an accumulation of OSErrors from logging and keeps the pty from crashing.
-- `query_endstops.py` now uses the webhooks module to register the
-  "/printer/endstops" endpoint
-- `pause_resume.py` now uses the webhooks module to register the
-  "/printer/pause", "/printer/resume", and "/printer/cancel" endpoints
-- `virtual_sdcard.py` has been updated to track and report more data about
-  an ongoing print.
+- Now you need to install the moonraker service:
+  ```
+  ~/klipper/scripts/install-moonraker-octopi.sh
+  ```
+  When the script completes it should start both Moonraker and Klipper. In
+  `klippy.log` you should find the following entry:\
+  `Moonraker: server connection detected`
 
-A default remote_api configuration on port 7000 that grants authorization to
-local clients on the IP range 192.168.1.0 can be configured as follows in
-printer.cfg:
+Moonraker is responsible for creating the Unix Domain Socket, so it must be
+started first for Klippy to connect.  In any instance where Klipper was
+started first simply restart the klipper service.
 ```
-[remote_api]
-port: 7000
+sudo service klipper restart
+```
+After the connection is established Klippy will register API endpoints and
+send configuration to the server.  Once the initial configuration is sent
+to Moonraker its configuration will be retained when Klippy disconnects
+(either through a restart or by stopping the service), and updated when
+Klippy reconnects.
+
+## Configuration
+
+The host, port, log file location, and socket file location are all
+specified via command arguments:
+```
+usage: moonraker.py [-h] [-a <address>] [-p <port>] [-s <socketfile>]
+                    [-l <logfile>]
+
+Moonraker - Klipper API Server
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -a <address>, --address <address>
+                        host name or ip to bind to the Web Server
+  -p <port>, --port <port>
+                        port the Web Server will listen on
+  -s <socketfile>, --socketfile <socketfile>
+                        file name and location for the Unix Domain Socket
+  -l <logfile>, --logfile <logfile>
+                        log file name and location
+```
+The default configuration is:
+- address = 0.0.0.0 (Bind to all interfaces)
+- port = 7125
+- socketfile = /tmp/moonraker
+- logfile = /tmp/moonraker.log
+
+Like klipper, arguments can be added to the defaults file located at
+`/etc/default/moonraker`. Do not change the socketfile unless you know
+what you are doing.  To correctly establish communications with klipper
+a change in the socket file location would require a change to
+webhooks.py in the klippy host's code.
+
+As shown above, Moonraker has its own log file located at /tmp/moonraker.log.
+This file contains log entries about both the connection to Klippy and
+connections to clients.
+
+All other configuration is sent to the server via Klippy, thus it is done in
+printer.cfg.  A basic configuration that authorizes clients on a range from
+192.168.1.1 - 192.168.1.254 is as follows:
+```
+[api_server]
 trusted_clients:
  192.168.1.0/24
 ```
 
 Below is a detailed explanation of all options currently available:
 ```
-#[remote_api]
-#host: 0.0.0.0
-#  The host IP to bind the server to.  Defaults to 0.0.0.0, which
-#  listens on all available interfaces.
-#port: 7125
-#  The port to listen on.  Defaults to 7125
+#[api_server]
 #api_key_path: ~
 #  The path to store the API Key.  Defaults to the user's home directory.
 #  The file name is `.klippy_api_key`, this cannot be changed.
@@ -135,9 +173,6 @@ Below is a detailed explanation of all options currently available:
 #  are calculated using the value defined by tick_time (See below for more
 #  information).  Default is 250ms.
 ```
-By default the server listens on all interfaces, port 7125.  Using 8080 works
-well for testing if you want to run Octoprint alongside Klippy's webserver
-(just make sure you stop webcamd if you are using it).
 
 The "status tiers" are used to determine how fast each klippy object is allowed
 to be polled.  Each tier is calculated using the `tick_time` option.  There are
@@ -387,20 +422,6 @@ uses promises to return responses and errors (see json-rc.js).
 - Returns:\
   `ok`
 
-### Fetch stored temperature data
-- HTTP command:\
-  `GET /printer/temperature_store`
-
-- Websocket command:
-  `{jsonrpc: "2.0", method: "get_printer_temperature_store", id: <request id>}`
-
-- Returns:\
-  An object where the keys are the available temperature sensor names, and with
-  the value being an array of stored temperatures.  The array is updated every
-  1 second by default, containing a total of 1200 values (20 minutes).  The
-  array is organized from oldest temperature to most recent (left to right).
-  Note that when the host starts each array is initialized to 0s.
-
 ### Restart the host
 - HTTP command:\
   `POST /printer/restart`
@@ -483,13 +504,13 @@ the currrent file list.  It cannot be used to download, upload, or delete files.
 
 ### Download klippy.log
 - HTTP command:\
-  `GET /printer/log`
+  `GET /printer/klippy.log`
 
 - Websocket command:\
   Get Log Not Supported
 
 - Returns:\
-  klippy.log, assuming it is located in the default directory (/tmp)
+  klippy.log
 
 ### Query Endstops
 - HTTP command:\
@@ -580,6 +601,32 @@ Klippy host.
 - Returns:\
   No return value as the server will shut down upon execution
 
+## Server Commands
+
+### Fetch stored temperature data
+- HTTP command:\
+  `GET /server/temperature_store`
+
+- Websocket command:
+  `{jsonrpc: "2.0", method: "get_server_temperature_store", id: <request id>}`
+
+- Returns:\
+  An object where the keys are the available temperature sensor names, and with
+  the value being an array of stored temperatures.  The array is updated every
+  1 second by default, containing a total of 1200 values (20 minutes).  The
+  array is organized from oldest temperature to most recent (left to right).
+  Note that when the host starts each array is initialized to 0s.
+
+### Download Moonraker Log
+- HTTP command:\
+  `GET /server/moonraker.log`
+
+- Websocket command:\
+  Not supported
+
+- Returns:\
+  moonraker.log
+
 ## Websocket notifications
 Printer generated events are sent over the websocket as JSON-RPC 2.0
 notifications.  These notifications are sent to all connected clients
@@ -641,6 +688,40 @@ The server is run in its own process using Python's multiprocessing module.
 Communication is done over a duplex pipe, ie a pair of "Connection" objects.
 The host registers the pipe's file descriptor with the Reactor for non-blocking
 reads.  Likewise the server registers its end of the pipe with Tornado's IOLoop.
+
+## Changes vs the official repo
+TODO: This is out of date, update it 
+You may notice that aside from the addition of the remote_api extra, other
+changes were made to support its additon. Below is a detailed list of the
+changes made:
+- `webhooks.py` has been added.  This module allows other host modules to
+  host modules to register endpoints without trying to load the web_server
+  module
+- The following changes have been made to `klippy.py`:
+  - The webhooks module is instantiated on printer initialization
+  - The following endpoints are registered and handled:
+    - /printer/info
+    - /printer/restart
+    - /printer/firmware_restart
+  - A "klippy:post_config" event is broadcast immediately after the config
+    has been read, before the unused option check.  The server uses this
+    event to register all webhooks.
+- The following changes have been made to `gcode.py`:
+  - The webhooks module is passed into the GCodeParser's constructor. The
+    the "/printer/gcode" endpoint is registered and handled by the GCodeParser
+    class.
+  - A "gcode:respond" event has been added.  The server uses this event to
+    broadcast gcode responses over all connected websockets
+  - When a write is performed on the pty, the exception handler now checks
+    for errno 11 (resource not available).  If this error is found
+    termios.tcflush is called to flush the output buffer.  This prevents
+    an accumulation of OSErrors from logging and keeps the pty from crashing.
+- `query_endstops.py` now uses the webhooks module to register the
+  "/printer/endstops" endpoint
+- `pause_resume.py` now uses the webhooks module to register the
+  "/printer/pause", "/printer/resume", and "/printer/cancel" endpoints
+- `virtual_sdcard.py` has been updated to track and report more data about
+  an ongoing print.
 
 ## Todo:
 - [X] Handle print requests.  Either use the virutal_sdcard, or have the

@@ -1,4 +1,31 @@
-### Version .06-alpha - TBD
+### Moonraker Version .07-alpha - 5/7/2020
+- The server process is no longer managed directly by Klippy.  It has moved
+  into its own process dubbed Moonraker.  Please see README.md for
+  installation instructions.
+- API Changes:
+  - `/printer/temperature_store` is now `/server/temperature_store`, or
+    `get_server_temperature_store` via the websocket
+  - `/printer/log` is now `/printer/klippy.log`
+  - `/server/moonraker.log` has been added to fetch the server's log file
+- Klippy Changes:
+  - The remote_api directory has been removed.  There is now a single
+    remote_api.py module that handles server configuration.
+  - webhooks.py has been changed to handle communications with the server
+  - klippy.py has been changed to pass itself to webhooks
+  - file_manager.py has been changed to specifiy the correct status code
+    when an error is generated attempting to upload or delete a file
+- The nginx configuration will need the following additional section:
+  ```
+  location /server {
+      proxy_pass http://apiserver/server;
+      proxy_set_header Host $http_host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Scheme $scheme;
+  }
+  ```
+
+### Version .06-alpha - 5/4/2020
 - Add `/machine/reboot` and `/machine/shutdown` endpoints.  These may be used
   to reboot or shutdown the host machine
 - Fix issue where websocket was blocked on long transactions, resulting in the

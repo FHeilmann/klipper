@@ -15,18 +15,25 @@ CONNECTION_TIMEOUT = 3600
 PRUNE_CHECK_TIME = 300 * 1000
 
 class Authorization:
-    def __init__(self, config):
-        self.api_key = config.get('api_key')
-        self.auth_enabled = config.get("require_auth", True)
-        self.trusted_ips = config.get("trusted_ips", [])
-        self.trusted_ranges = config.get("trusted_ranges", [])
+    def __init__(self):
+        self.api_key = ""
+        # XXX - I may need to add a way to connect on the first run
+        self.auth_enabled = True
+        self.trusted_ips = []
+        self.trusted_ranges = []
         self.trusted_connections = {}
         self.access_tokens = {}
         self.prune_handler = PeriodicCallback(
             self._prune_conn_handler, PRUNE_CHECK_TIME)
         self.prune_handler.start()
+
+    def load_config(self, config):
+        self.api_key = config.get('api_key', self.api_key)
+        self.auth_enabled = config.get("require_auth", self.auth_enabled)
+        self.trusted_ips = config.get("trusted_ips", self.trusted_ips)
+        self.trusted_ranges = config.get("trusted_ranges", self.trusted_ranges)
         logging.info(
-            "Authorization Plugin Initialized\n"
+            "Authorization Configuration Loaded\n"
             "Auth Enabled: %s\n"
             "Trusted IPs:\n%s\n"
             "Trusted IP Ranges:\n%s" %

@@ -6,11 +6,11 @@
 
 import logging
 import tornado
+import json
 from tornado import gen
 from tornado.ioloop import IOLoop
 from tornado.websocket import WebSocketHandler
-from tornado.concurrent import Future
-from server_util import ServerError, json_encode, json_loads_byteified, DEBUG
+from utils import ServerError, DEBUG, json_loads_byteified
 
 class JsonRPC:
     def __init__(self):
@@ -18,6 +18,9 @@ class JsonRPC:
 
     def register_method(self, name, method):
         self.methods[name] = method
+
+    def remove_method(self, name):
+        self.methods.pop(name)
 
     @gen.coroutine
     def dispatch(self, data):
@@ -28,7 +31,7 @@ class JsonRPC:
             msg = "Websocket data not json: %s" % (str(data))
             logging.exception(msg)
             response = self.build_error(-32700, "Parse error")
-            raise gen.Return(json_encode(response))
+            raise gen.Return(json.dumps(response))
         if DEBUG:
             logging.info("Websocket Request::" + data)
         if isinstance(request, list):
@@ -42,7 +45,7 @@ class JsonRPC:
         else:
             response = yield self.process_request(request)
         if response is not None:
-            response = json_encode(response)
+            response = json.dumps(response)
         raise gen.Return(response)
 
     @gen.coroutine
@@ -108,30 +111,27 @@ class WebsocketManager:
         self.ws_lock = tornado.locks.Lock()
         self.rpc = JsonRPC()
 
-    def register_api_hook(self, path, methods, params):
+    def register_handler(self, path, methods, params):
         request_type = params.get('handler', "KlippyRequestHandler")
-        if request_type in ["KlippyRequestHandler", "ServerRequestHandler"]:
+        if request_type == "KlippyRequestHandler":
             # Websocket only supports basic Klippy Requests
             for method in methods:
                 # Format the endpoint into something more json friendly
                 cmd = method.lower() + path.replace('/', '_')
-                rpc_cb = self._generate_callback(path, method, request_type)
+                rpc_cb = self._generate_callback(path, method)
                 self.rpc.register_method(cmd, rpc_cb)
 
-    def _generate_callback(self, path, method, request_type):
-        if request_type == "ServerRequestHandler":
-            def func(**kwargs):
-                ft = Future()
-                result = self.server_mgr.make_local_request(
-                    path, method, kwargs)
-                ft.set_result(result)
-                return ft
-        else:
-            @gen.coroutine
-            def func(**kwargs):
-                request = self.server_mgr.make_request(path, method, kwargs)
-                result = yield request.wait()
-                raise gen.Return(result)
+    def remove_handler(self, path):
+        cmd = path.replace('/', '_')
+        for method in ["get", "post", "delete"]:
+            self.rpc.remove_method(method + "_" + cmd)
+
+    def _generate_callback(self, path, method):
+        @gen.coroutine
+        def func(**kwargs):
+            request = self.server_mgr.make_request(path, method, kwargs)
+            result = yield request.wait()
+            raise gen.Return(result)
         return func
 
     def has_websocket(self, ws_id):

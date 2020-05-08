@@ -1,24 +1,15 @@
-# Klippy Status and Subscription Handler
+# Moonraker - Moonraker API server configuation and event relay
 #
 # Copyright (C) 2020 Eric Callahan <arksine.code@gmail.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license
-import re
 import logging
+import uuid
+import re
+import os
 
+API_KEY_FILE = '.klippy_api_key'
 MAX_TICKS = 64
-
-# Status objects require special parsing
-def _status_parser(request):
-    query_args = request.query_arguments
-    args = {}
-    for key, vals in query_args.iteritems():
-        parsed = []
-        for v in vals:
-            if v:
-                parsed += v.split(',')
-        args[key] = parsed
-    return args
 
 class StatusHandler:
     def __init__(self, config, notification_cb):
@@ -65,10 +56,10 @@ class StatusHandler:
             '/printer/objects', self._handle_object_request)
         webhooks.register_endpoint(
             '/printer/status', self._handle_status_request,
-            params={'arg_parser': _status_parser})
+            params={'arg_parser': "status_parser"})
         webhooks.register_endpoint(
             '/printer/subscriptions', self._handle_subscription_request,
-            ['GET', 'POST'], {'arg_parser': _status_parser})
+            ['GET', 'POST'], {'arg_parser': "status_parser"})
 
     def initialize(self):
         self.available_objects = {}
@@ -194,7 +185,7 @@ class StatusHandler:
         for obj in new_sub:
             if obj not in self.available_objects:
                 logging.info(
-                    "[WEBSERVER] subscription_handler: Subscription Request"
+                    "[MOONRAKER] subscription_handler: Subscription Request"
                     " {%s} not available, ignoring" % (obj))
                 continue
             poll_ticks = self.get_poll_ticks(obj)
@@ -214,3 +205,174 @@ class StatusHandler:
             # update
             waketime += 1.
         self.reactor.update_timer(self.subscription_timer, waketime)
+
+class MoonrakerConfig:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
+        self.webhooks = self.printer.lookup_object('webhooks')
+        self.server_conn = self.webhooks.get_connection()
+        self.server_send = self.server_conn.send
+        self.status_hdlr = StatusHandler(
+            config, self.send_notification)
+
+        # Get API Key
+        key_path = os.path.normpath(
+            os.path.expanduser(config.get('api_key_path', '~')))
+        self.api_key_loc = os.path.join(key_path, API_KEY_FILE)
+        self.api_key = self._read_api_key()
+
+        # Register GCode
+        gcode = self.printer.lookup_object('gcode')
+        gcode.register_command(
+            "GET_API_KEY", self.cmd_GET_API_KEY,
+            desc=self.cmd_GET_API_KEY_help)
+
+        # Register webhooks
+        self.webhooks.register_endpoint(
+            '/access/api_key', self._handle_apikey_request,
+            methods=['GET', 'POST'])
+        self.webhooks.register_endpoint(
+            '/access/oneshot_token', None,
+            params={'handler': 'TokenRequestHandler'})
+
+        # Load Server Config
+        self._load_server_config(config)
+
+        # Start Server process and handle Klippy events only
+        # if not in batch mode
+        if self.server_conn.is_connected():
+            logging.info("Moonraker: server connection detected")
+            self.printer.register_event_handler(
+                "klippy:ready", self._handle_ready)
+            self.printer.register_event_handler(
+                "klippy:shutdown", lambda s=self:
+                s._handle_klippy_state("shutdown"))
+            self.printer.register_event_handler(
+                "gcode:request_restart", self._handle_restart)
+            self.printer.register_event_handler(
+                "gcode:respond", self._handle_gcode_response)
+        else:
+            logging.info("Moonraker: server not connected,"
+                         " events will not be processed")
+
+        # Attempt to load the pause_resume modules
+        self.printer.try_load_module(config, "pause_resume")
+
+
+    def _load_server_config(self, config):
+        # Helper to parse (string, float) tuples from the config
+        def parse_tuple(option_name):
+            tup_opt = config.get(option_name, None)
+            if tup_opt is not None:
+                try:
+                    tup_opt = tup_opt.split('\n')
+                    tup_opt = [cmd.split(',', 1) for cmd in tup_opt
+                               if cmd.strip()]
+                    tup_opt = {k.strip().upper(): float(v.strip()) for (k, v)
+                               in tup_opt if k.strip()}
+                except Exception:
+                    raise config.error("Error parsing %s" % option_name)
+                return tup_opt
+            return {}
+
+        server_config = {}
+        # Get Timeouts
+        server_config['request_timeout'] = config.getfloat(
+            'request_timeout', 5.)
+        long_reqs = parse_tuple('long_running_requests')
+        server_config['long_running_requests'] = {
+            '/printer/gcode': 60.,
+            '/printer/print/pause': 60.,
+            '/printer/print/resume': 60.,
+            '/printer/print/cancel': 60.
+        }
+        server_config['long_running_requests'].update(long_reqs)
+        server_config['long_running_gcodes'] = parse_tuple(
+            'long_running_gcodes')
+
+        # Check Virtual SDCard is loaded
+        if not config.has_section('virtual_sdcard'):
+            raise config.error(
+                "RemoteAPI: The [virtual_sdcard] section "
+                "must be present and configured in printer.cfg")
+
+        # Authorization Config
+        server_config['api_key'] = self.api_key
+        server_config['require_auth'] = config.getboolean('require_auth', True)
+        server_config['enable_cors'] = config.getboolean('enable_cors', False)
+        trusted_clients = config.get("trusted_clients", "")
+        trusted_clients = [c for c in trusted_clients.split('\n') if c.strip()]
+        trusted_ips = []
+        trusted_ranges = []
+        ip_regex = re.compile(
+            r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}'
+            r'([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')
+        range_regex = re.compile(
+            r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}'
+            r'0/24$')
+        for ip in trusted_clients:
+            if ip_regex.match(ip) is not None:
+                trusted_ips.append(ip)
+            elif range_regex.match(ip) is not None:
+                trusted_ranges.append(ip[:ip.rfind('.')])
+            else:
+                raise config.error(
+                    "[WEBSERVER]: Unknown value in trusted_clients option, %s"
+                    % (ip))
+        server_config['trusted_ips'] = trusted_ips
+        server_config['trusted_ranges'] = trusted_ranges
+        params = {'config': server_config}
+        self.server_send({'method': "load_config", 'params': params})
+
+    def _handle_ready(self):
+        sensors = self.status_hdlr.initialize()
+        params = {'sensors': sensors}
+        self.server_send({'method': "set_sensors", 'params': params})
+        self._handle_klippy_state("ready")
+
+    def _handle_restart(self, eventtime):
+        self.status_hdlr.stop()
+
+    def _handle_klippy_state(self, state):
+        self.send_notification('klippy_state_changed', state)
+
+    def _handle_gcode_response(self, gc_response):
+        self.send_notification('gcode_response', gc_response)
+
+    def _handle_apikey_request(self, web_request):
+        method = web_request.get_method()
+        if method == "POST":
+            # POST requests generate and return a new API Key
+            self.api_key = self._create_api_key()
+        web_request.send(self.api_key)
+
+    def send_notification(self, notify_name, state):
+        params = {'name': notify_name, 'state': state}
+        self.server_send({'method': 'notification', 'params': params})
+
+    def _read_api_key(self):
+        if os.path.exists(self.api_key_loc):
+            with open(self.api_key_loc, 'r') as f:
+                api_key = f.read()
+            return api_key
+        # API Key file doesn't exist.  Generate
+        # a new api key and create the file.
+        logging.info(
+            "remote_api: No API Key file found, creating new one at:\n%s"
+            % (self.api_key_loc))
+        return self._create_api_key()
+
+    def _create_api_key(self):
+        api_key = uuid.uuid4().hex
+        with open(self.api_key_loc, 'w') as f:
+            f.write(api_key)
+        return api_key
+
+    cmd_GET_API_KEY_help = "Print webserver API key to terminal"
+    def cmd_GET_API_KEY(self, gcmd):
+        gcmd.respond_info(
+            "Curent Webserver API Key: %s" % (self.api_key), log=False)
+
+def load_config(config):
+    return MoonrakerConfig(config)

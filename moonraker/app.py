@@ -8,14 +8,28 @@ import os
 import mimetypes
 import logging
 import tornado
+from inspect import isclass
 from tornado import gen
-from server_util import DEBUG, ServerError
+from tornado.routing import Rule, PathMatches, AnyMatches
+from utils import DEBUG, ServerError
 from ws_manager import WebsocketManager, WebSocket
 from authorization import AuthorizedRequestHandler, AuthorizedFileHandler
 from authorization import Authorization
 
 # Max Upload Size of 200MB
 MAX_UPLOAD_SIZE = 200 * 1024 * 1024
+
+# Status objects require special parsing
+def _status_parser(request):
+    query_args = request.query_arguments
+    args = {}
+    for key, vals in query_args.iteritems():
+        parsed = []
+        for v in vals:
+            if v:
+                parsed += v.split(',')
+        args[key] = parsed
+    return args
 
 # Built-in Query String Parser
 def _default_parser(request):
@@ -27,18 +41,47 @@ def _default_parser(request):
         args[key] = vals[0]
     return args
 
-class TornadoApp:
-    def __init__(self, server_mgr, server_config):
+class MutableRouter(tornado.web.ReversibleRuleRouter):
+    def __init__(self, application):
+        self.application = application
+        self.pattern_to_rule = {}
+        super(MutableRouter, self).__init__(None)
+
+    def get_target_delegate(self, target, request, **target_params):
+        if isclass(target) and issubclass(target, tornado.web.RequestHandler):
+            return self.application.get_handler_delegate(
+                request, target, **target_params)
+
+        return super(MutableRouter, self).get_target_delegate(
+            target, request, **target_params)
+
+    def has_rule(self, pattern):
+        return pattern in self.pattern_to_rule
+
+    def add_handler(self, pattern, target, target_params):
+        if pattern in self.pattern_to_rule:
+            self.remove_handler(pattern)
+        new_rule = Rule(PathMatches(pattern), target, target_params)
+        self.pattern_to_rule[pattern] = new_rule
+        self.rules.append(new_rule)
+
+    def remove_handler(self, pattern):
+        rule = self.pattern_to_rule.pop(pattern)
+        if rule is not None:
+            try:
+                self.rules.remove(rule)
+            except Exception:
+                logging.exception("Unable to remove rule: %s" % (pattern))
+
+class MoonrakerApp:
+    def __init__(self, server_mgr):
         self.server_mgr = server_mgr
         self.tornado_server = None
-        self.registered_hooks = []
-        enable_cors = server_config.get('enable_cors', False)
-        initial_hooks = server_config.get('initial_hooks', [])
 
         # Set Up Websocket and Authorization Managers
         self.websocket_manager = WebsocketManager(server_mgr)
         self.send_all_websockets = self.websocket_manager.send_all_websockets
-        self.auth = Authorization(server_config)
+        self.auth = Authorization()
 
         mimetypes.add_type('text/plain', '.log')
         mimetypes.add_type('text/plain', '.gcode')
@@ -47,22 +90,23 @@ class TornadoApp:
             'KlippyRequestHandler': KlippyRequestHandler,
             'FileRequestHandler': FileRequestHandler,
             'FileUploadHandler': FileUploadHandler,
-            'TokenRequestHandler': TokenRequestHandler,
-            'ServerRequestHandler': ServerRequestHandler}
+            'TokenRequestHandler': TokenRequestHandler}
 
+        self.mutable_router = MutableRouter(self)
         app_handlers = [
+            (AnyMatches(), self.mutable_router),
             (r'/websocket', WebSocket,
              {'ws_manager': self.websocket_manager, 'auth': self.auth}),
             (r'/api/version', EmulateOctoprintHandler,
              {'server_manager': server_mgr, 'auth': self.auth})]
-        app_handlers += self.prepare_handlers(initial_hooks)
 
         self.app = tornado.web.Application(
             app_handlers,
             serve_traceback=DEBUG,
             websocket_ping_interval=10,
             websocket_ping_timeout=30,
-            enable_cors=enable_cors)
+            enable_cors=False)
+        self.get_handler_delegate = self.app.get_handler_delegate
 
     def listen(self, host, port):
         self.tornado_server = self.app.listen(
@@ -76,34 +120,43 @@ class TornadoApp:
         yield self.websocket_manager.close()
         self.auth.close()
 
-    def register_api_hooks(self, hooks):
-        handlers = self.prepare_handlers(hooks)
-        self.app.add_handlers(r'.*', handlers)
+    def load_config(self, config):
+        if 'enable_cors' in config:
+            self.app.settings['enable_cors'] = config['enable_cors']
+        self.auth.load_config(config)
 
-    def prepare_handlers(self, hooks):
-        handlers = []
-        for (pattern, methods, params) in hooks:
-            if pattern in self.registered_hooks:
-                # Don't allow multiple hooks
-                continue
-            self.registered_hooks.append(pattern)
-            self.websocket_manager.register_api_hook(
-                pattern, methods, params)
-            request_type = params.pop('handler', 'KlippyRequestHandler')
-            request_hdlr = self.request_handlers.get(request_type)
-            hdlr_params = dict(params)
-            if request_hdlr is not None:
-                hdlr_params['server_manager'] = self.server_mgr
-                hdlr_params['auth'] = self.auth
-                if request_type == "KlippyRequestHandler":
-                    # Base Klippy Requests require additional params
-                    hdlr_params['methods'] = methods
-                    params.setdefault('arg_parser', _default_parser)
-                elif request_type == "FileRequestHandler":
-                    hdlr_params['methods'] = methods
-                    hdlr_params['pattern'] = pattern
-                handlers.append((pattern, request_hdlr, hdlr_params))
-        return handlers
+    def register_hook(self, pattern, methods, params):
+        logging.info(
+            "Registering endpoint %s %s, params %s"
+            % (" ".join(methods), pattern, str(params)))
+        self.websocket_manager.register_handler(
+            pattern, methods, params)
+        request_type = params.pop('handler', 'KlippyRequestHandler')
+        request_hdlr = self.request_handlers.get(request_type)
+        hdlr_params = dict(params)
+        if request_hdlr is not None:
+            hdlr_params['server_manager'] = self.server_mgr
+            hdlr_params['auth'] = self.auth
+            if request_type == "KlippyRequestHandler":
+                # Base Klippy Requests require additional params
+                hdlr_params['methods'] = methods
+                hdlr_params['arg_parser'] = self._get_arg_parser(hdlr_params)
+            elif request_type == "FileRequestHandler":
+                hdlr_params['methods'] = methods
+                hdlr_params['pattern'] = pattern
+            self.mutable_router.add_handler(
+                pattern, request_hdlr, hdlr_params)
+
+    def remove_hook(self, pattern):
+        self.websocket_manager.remove_handler(pattern)
+        self.mutable_router.remove_handler(pattern)
+
+    def _get_arg_parser(self, params):
+        name = params.get('arg_parser', "default_parser")
+        if name == 'status_parser':
+            return _status_parser
+        else:
+            return _default_parser
 
 class KlippyRequestHandler(AuthorizedRequestHandler):
     def initialize(self, server_manager, auth, methods, arg_parser):
@@ -179,8 +232,9 @@ class FileRequestHandler(AuthorizedFileHandler):
             {'filename': self.absolute_path})
         result = yield request.wait()
         if isinstance(result, ServerError):
-            raise tornado.web.HTTPError(
-                503, "File is loaded, DELETE not permitted")
+            if result.status_code == 403:
+                raise tornado.web.HTTPError(
+                    403, "File is loaded, DELETE not permitted")
 
         os.remove(self.absolute_path)
         filename = os.path.basename(self.absolute_path)
@@ -207,8 +261,13 @@ class FileUploadHandler(AuthorizedRequestHandler):
             {'filename': full_path})
         result = yield request.wait()
         if isinstance(result, ServerError):
-            raise tornado.web.HTTPError(
-                503, "File is loaded, upload not permitted")
+            if result.status_code == 403:
+                raise tornado.web.HTTPError(
+                    403, "File is loaded, upload not permitted")
+            else:
+                # Couldn't reach Klippy, so it should be safe
+                # to permit the upload but not start
+                start_print = False
         # Don't start if a print is currently in progress
         start_print = start_print and not result['print_ongoing']
         try:
@@ -249,12 +308,3 @@ class EmulateOctoprintHandler(AuthorizedRequestHandler):
             'server': "1.1.1",
             'api': "0.1",
             'text': "OctoPrint Upload Emulator"})
-
-class ServerRequestHandler(AuthorizedRequestHandler):
-    def get(self):
-        args = {}
-        if self.request.query:
-            args = _default_parser(self.request)
-        result = self.manager.make_local_request(
-            self.request.path, 'GET', args)
-        self.finish({'result': result})
