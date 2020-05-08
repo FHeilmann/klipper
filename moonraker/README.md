@@ -53,7 +53,7 @@ Moonraker's only additional dependency is Tornado.
 
 - Now you need to install the moonraker service:
   ```
-  ~/klipper/scripts/install-moonraker-octopi.sh
+  ~/klipper/scripts/install-moonraker.sh
   ```
   When the script completes it should start both Moonraker and Klipper. In
   `klippy.log` you should find the following entry:\
