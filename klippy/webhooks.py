@@ -233,5 +233,5 @@ class WebHooks:
         if cb is None:
             msg = "webhooks: No registered callback for path '%s'" % (path)
             logging.info(msg)
-            raise WebRequestError(msg)
+            raise WebRequestError(msg, 404)
         return cb
