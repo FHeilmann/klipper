@@ -271,7 +271,7 @@ class FileManager:
             print_ongoing = sd_status['total_duration'] > 0.000001
             full_path = os.path.join(self.sd_path, current_file)
             if full_path == requested_file:
-                raise web_request.error("File currently in use")
+                raise web_request.error("File currently in use", 403)
         web_request.send({'print_ongoing': print_ongoing})
 
     def get_sd_directory(self):
