@@ -57,7 +57,7 @@ class Printer:
         self.in_shutdown_state = False
         self.run_result = None
         self.event_handlers = {}
-        web_hooks = webhooks.WebHooks()
+        web_hooks = webhooks.WebHooks(self)
         gc = gcode.GCodeParser(self, input_fd, web_hooks)
         self.objects = collections.OrderedDict(
             {'gcode': gc, 'webhooks': web_hooks})
@@ -68,7 +68,7 @@ class Printer:
         log_file = start_args.get('log_file')
         if log_file is not None:
             web_hooks.register_endpoint(
-                "/printer/log()", None,
+                "/printer/klippy.log()", None,
                 params={'handler': 'FileRequestHandler', 'path': log_file})
     def get_start_args(self):
         return self.start_args
@@ -133,10 +133,11 @@ class Printer:
         config = pconfig.read_main_config()
         if self.bglogger is not None:
             pconfig.log_config(config)
-        # Attempt to bring up API server first if configured.  Allows clients
-        # access to config and restart endpoints if there is a config error
-        if config.has_section('remote_api'):
-            self.try_load_module(config, 'remote_api')
+        # Attempt to load the api_server module first.  This allows the server
+        # to be configured in the event that another module generates a config
+        # error
+        if config.has_section('api_server'):
+            self.try_load_module(config, 'api_server')
         # Create printer components
         for m in [pins, mcu]:
             m.add_printer_objects(config)
