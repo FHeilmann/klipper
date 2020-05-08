@@ -153,6 +153,8 @@ class ServerConnection:
         requests[0] = self.partial_data + requests[0]
         self.partial_data = requests.pop()
         for req in requests:
+            logging.info(
+                "ServerConnection: Request received from Moonraker %s" % (req))
             try:
                 decoded_req = json_loads_byteified(req)
                 self._process_request(decoded_req)
@@ -172,20 +174,24 @@ class ServerConnection:
         except Exception as e:
             web_request.set_error(WebRequestError(e.message))
         result = web_request.finish()
+        logging.info(
+            "ServerConnection: Sending response - %s" % (str(result)))
         self.send({'method': "response", 'params': result})
 
     def send(self, data):
         if not self.is_server_connected:
             return
         with self.mutex:
+            retries = 10
             data = json.dumps(data) + "\x00"
             while data:
                 try:
                     sent = self.socket.send(data)
                 except socket.error as e:
-                    if e.errno == 9 or e.errno == 32:
+                    if e.errno == 9 or e.errno == 32 or not retries:
                         sent = 0
                     else:
+                        retries -= 1
                         waketime = self.reactor.monotonic() + .001
                         self.reactor.pause(waketime)
                         continue

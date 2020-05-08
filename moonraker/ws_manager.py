@@ -46,6 +46,7 @@ class JsonRPC:
             response = yield self.process_request(request)
         if response is not None:
             response = json.dumps(response)
+            logging.info("Websocket Response::" + response)
         raise gen.Return(response)
 
     @gen.coroutine

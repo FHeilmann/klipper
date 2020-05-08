@@ -127,7 +127,7 @@ class MoonrakerApp:
 
     def register_hook(self, pattern, methods, params):
         logging.info(
-            "Registering endpoint %s %s, params %s"
+            "Registering endpoint %s %s, params: %s"
             % (" ".join(methods), pattern, str(params)))
         self.websocket_manager.register_handler(
             pattern, methods, params)

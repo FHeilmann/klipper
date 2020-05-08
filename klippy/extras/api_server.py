@@ -185,8 +185,8 @@ class StatusHandler:
         for obj in new_sub:
             if obj not in self.available_objects:
                 logging.info(
-                    "[MOONRAKER] subscription_handler: Subscription Request"
-                    " {%s} not available, ignoring" % (obj))
+                    "api_server: Object {%s} not available for subscription"
+                    % (obj))
                 continue
             poll_ticks = self.get_poll_ticks(obj)
             if poll_ticks == 0:
@@ -246,8 +246,7 @@ class MoonrakerConfig:
             self.printer.register_event_handler(
                 "klippy:ready", self._handle_ready)
             self.printer.register_event_handler(
-                "klippy:shutdown", lambda s=self:
-                s._handle_klippy_state("shutdown"))
+                "klippy:shutdown", self._handle_shutdown)
             self.printer.register_event_handler(
                 "gcode:request_restart", self._handle_restart)
             self.printer.register_event_handler(
@@ -258,7 +257,6 @@ class MoonrakerConfig:
 
         # Attempt to load the pause_resume modules
         self.printer.try_load_module(config, "pause_resume")
-
 
     def _load_server_config(self, config):
         # Helper to parse (string, float) tuples from the config
@@ -318,7 +316,7 @@ class MoonrakerConfig:
                 trusted_ranges.append(ip[:ip.rfind('.')])
             else:
                 raise config.error(
-                    "[WEBSERVER]: Unknown value in trusted_clients option, %s"
+                    "api_server: Unknown value in trusted_clients option, %s"
                     % (ip))
         server_config['trusted_ips'] = trusted_ips
         server_config['trusted_ranges'] = trusted_ranges
@@ -328,14 +326,13 @@ class MoonrakerConfig:
     def _handle_ready(self):
         sensors = self.status_hdlr.initialize()
         params = {'sensors': sensors}
-        self.server_send({'method': "set_sensors", 'params': params})
-        self._handle_klippy_state("ready")
+        self.server_send({'method': "set_klippy_ready", 'params': params})
 
     def _handle_restart(self, eventtime):
         self.status_hdlr.stop()
 
-    def _handle_klippy_state(self, state):
-        self.send_notification('klippy_state_changed', state)
+    def _handle_shutdown(self):
+        self.server_send({'method': "set_klippy_shutdown", 'params': {}})
 
     def _handle_gcode_response(self, gc_response):
         self.send_notification('gcode_response', gc_response)
@@ -359,7 +356,7 @@ class MoonrakerConfig:
         # API Key file doesn't exist.  Generate
         # a new api key and create the file.
         logging.info(
-            "remote_api: No API Key file found, creating new one at:\n%s"
+            "api_server: No API Key file found, creating new one at:\n%s"
             % (self.api_key_loc))
         return self._create_api_key()
 

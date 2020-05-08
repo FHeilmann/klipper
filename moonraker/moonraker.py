@@ -42,6 +42,7 @@ class ServerManager:
             self.klippy_server_sock, self._handle_klippy_connection)
         self.klippy_sock = None
         self.is_klippy_connected = False
+        self.is_klippy_ready = False
         self.partial_data = ""
 
         # Server/IOLoop
@@ -74,7 +75,8 @@ class ServerManager:
         self.server_callbacks = {
             'add_hook': self._add_hook,
             'load_config': self._load_config,
-            'set_sensors': self._set_available_sensors,
+            'set_klippy_ready': self._set_klippy_ready,
+            'set_klippy_shutdown': self._set_klippy_shutdown,
             'response': self._handle_klippy_response,
             'notification': self._handle_notification
         }
@@ -136,15 +138,17 @@ class ServerManager:
     def klippy_send(self, data):
         if not self.is_klippy_connected:
             return False
+        retries = 10
         data = json.dumps(data) + "\x00"
         while data:
             try:
                 sent = self.klippy_sock.send(data)
             except socket.error as e:
-                if e.errno == 9 or e.errno == 32:
+                if e.errno == 9 or e.errno == 32 or not retries:
                     sent = 0
                 else:
                     # XXX - Should pause for 1ms here
+                    retries -= 1
                     continue
             if sent > 0:
                 data = data[sent:]
@@ -163,8 +167,9 @@ class ServerManager:
             'long_running_requests', self.long_running_requests)
         self.moonraker_app.load_config(config)
 
-    def _set_available_sensors(self, sensors):
-        logging.info("Setting available sensors: %s" % (" ".join(sensors)))
+    def _set_klippy_ready(self, sensors):
+        logging.info("Klippy ready, setting available sensors: %s"
+                     % (str(sensors)))
         new_store = {}
         for sensor in sensors:
             if sensor in self.temperature_store:
@@ -175,6 +180,13 @@ class ServerManager:
                     'targets': deque(maxlen=TEMPERATURE_STORE_SIZE)}
         self.temperature_store = new_store
         self.temp_update_cb.start()
+        self.is_klippy_ready = True
+        self._handle_notification("klippy_state_changed", "ready")
+
+    def _set_klippy_shutdown(self):
+        logging.info("Klippy has shutdown")
+        self.is_klippy_ready = False
+        self._handle_notification("klippy_state_changed", "shutdown")
 
     def _add_hook(self, hook, is_local=False):
         self.io_loop.add_callback(
@@ -187,6 +199,8 @@ class ServerManager:
                 response = ServerError(
                     response['message'], response.get('status_code', 400))
             req.notify(response)
+        else:
+            logging.info("No request matching response: " + str(response))
 
     def _handle_notification(self, name, state):
         self.io_loop.spawn_callback(
@@ -291,6 +305,7 @@ class ServerManager:
         raise gen.Return(ret)
 
     def close_client_sock(self):
+        self.is_klippy_ready = False
         if self.is_klippy_connected:
             self.is_klippy_connected = False
             logging.info("Klippy Connection Removed")
@@ -376,6 +391,9 @@ def main():
     root_logger.addHandler(file_hdlr)
     root_logger.setLevel(logging.INFO)
     logging.info("="*25 + "Starting Moonraker..." + "="*25)
+    formatter = logging.Formatter(
+        '%(asctime)s [%(filename)s:%(funcName)s()] - %(message)s')
+    file_hdlr.setFormatter(formatter)
 
     # Start IOLoop and Server
     io_loop = IOLoop.current()
