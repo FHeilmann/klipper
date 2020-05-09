@@ -256,7 +256,7 @@ class MoonrakerConfig:
                          " events will not be processed")
 
         # Attempt to load the pause_resume modules
-        self.printer.try_load_module(config, "pause_resume")
+        self.printer.load_object(config, "pause_resume")
 
     def _load_server_config(self, config):
         # Helper to parse (string, float) tuples from the config

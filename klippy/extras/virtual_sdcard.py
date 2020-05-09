@@ -10,7 +10,7 @@ class VirtualSD:
         printer = config.get_printer()
         printer.register_event_handler("klippy:shutdown", self.handle_shutdown)
         # File List/Info
-        self.filemanager = printer.try_load_module(config, 'file_manager')
+        self.filemanager = printer.load_object(config, 'file_manager')
         if self.filemanager is None:
             raise config.error("virtual_sdcard: unable to load FileManager")
         # sdcard state

@@ -36,7 +36,7 @@ class SlicerTemplate:
             'layer_height': None,
             'filament_total': None,
             'estimated_time': None}
-        gcode_macro = self.printer.try_load_module(config, 'gcode_macro')
+        gcode_macro = self.printer.load_object(config, 'gcode_macro')
         for name in self.templates:
             if config.get(name + "_script", None) is not None:
                 self.templates[name] = gcode_macro.load_template(

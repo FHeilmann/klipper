@@ -137,7 +137,7 @@ class Printer:
         # to be configured in the event that another module generates a config
         # error
         if config.has_section('api_server'):
-            self.try_load_module(config, 'api_server')
+            self.load_object(config, 'api_server')
         # Create printer components
         for m in [pins, mcu]:
             m.add_printer_objects(config)
