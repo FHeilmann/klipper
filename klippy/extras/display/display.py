@@ -139,6 +139,11 @@ class PrinterLCD:
         for group_name, data_configs in groups.items():
             dg = DisplayGroup(config, group_name, data_configs)
             self.display_data_groups[group_name] = dg
+        # Load custom display glyphs
+        dg_prefix = 'display_glyph '
+        dg_main = config.get_prefix_sections(dg_prefix)
+        for dg in dg_main:
+          self.lcd_chip.parse_glyph(dg.get_name()[len(dg_prefix):], dg.get('data'))
     # Initialization
     def handle_ready(self):
         self.lcd_chip.init()

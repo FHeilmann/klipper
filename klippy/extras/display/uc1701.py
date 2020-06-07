@@ -83,6 +83,23 @@ class DisplayBase:
                 if (bits << col) & 0x80:
                     page[pix_x] ^= bit
                 pix_x += 1
+    def parse_glyph(self, glyph_name, glyph_data_raw):
+        glyph_data = []
+        for line in glyph_data_raw.split('\n'):
+          if line:
+            line_val = int(line, 2)
+            if line_val > 65535:
+                logging.warn("Glyph line out of range for glyph %s" + \
+                             "maximum is 65535" % (glyph_name,))
+                return
+            glyph_data.append(line_val)
+        if len(glyph_data) < 16:
+            logging.warn("Not enough lines for glyph %s, 16 lines are needed"
+                         % (glyph_name,))
+            return
+        top1, bot1 = self._swizzle_bits([d >> 8 for d in glyph_data])
+        top2, bot2 = self._swizzle_bits(glyph_data)
+        self.icons[glyph_name] = (top1 + top2, bot1 + bot2)
     def write_glyph(self, x, y, glyph_name):
         icon = self.icons.get(glyph_name)
         if icon is not None and x < 15:
