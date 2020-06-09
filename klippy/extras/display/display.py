@@ -103,19 +103,11 @@ class PrinterLCD:
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
         self.screen_update_timer = self.reactor.register_timer(
             self.screen_update_event)
+        gcode = self.printer.lookup_object("gcode")
+        gcode.register_command(
+            'SET_DISPLAY_GROUP', self.cmd_SET_DISPLAY_GROUP,
+            desc=self.cmd_SET_DISPLAY_GROUP_help)
     # Configurable display
-    def _parse_glyph(self, config, glyph_name, data, width, height):
-        glyph_data = []
-        for line in data.split('\n'):
-            line = line.strip().replace('.', '0').replace('*', '1')
-            if not line:
-                continue
-            if len(line) != width or line.replace('0', '').replace('1', ''):
-                raise config.error("Invalid glyph line in %s" % (glyph_name,))
-            glyph_data.append(int(line, 2))
-        if len(glyph_data) != height:
-            raise config.error("Glyph %s incorrect lines" % (glyph_name,))
-        return glyph_data
     def load_config(self, config):
         # Load default display config file
         pconfig = self.printer.lookup_object('configfile')
@@ -157,15 +149,18 @@ class PrinterLCD:
                   if c.get_name() not in dg_main_names]
         for dg in dg_main + dg_def:
             glyph_name = dg.get_name()[len(dg_prefix):]
-            data = dg.get('data', None)
-            if data is not None:
-                idata = self._parse_glyph(config, glyph_name, data, 16, 16)
-                icons.setdefault(glyph_name, {})['icon16x16'] = idata
-            data = dg.get('hd44780_data', None)
-            if data is not None:
-                slot = dg.getint('hd44780_slot', minval=0, maxval=7)
-                idata = self._parse_glyph(config, glyph_name, data, 5, 8)
-                icons.setdefault(glyph_name, {})['icon5x8'] = (slot, idata)
+            glyph_data = []
+            for line in dg.get('data').split('\n'):
+                if line:
+                    line_val = int(line, 2)
+                    if line_val > 65535:
+                        raise config.error("Glyph line out of range for " + \
+                                 "glyph %s maximum is 65535" % (glyph_name,))
+                    glyph_data.append(line_val)
+            if len(glyph_data) < 16:
+                raise config.error("Not enough lines for" + \
+                        "glyph %s, 16 lines are needed" % (glyph_name,))
+            icons[dg.get_name()[len(dg_prefix):]] = glyph_data
         self.lcd_chip.set_glyphs(icons)
     # Initialization
     def handle_ready(self):
@@ -215,6 +210,13 @@ class PrinterLCD:
             self.lcd_chip.write_graphics(col, row, i, data)
         self.lcd_chip.write_graphics(col, row, 15, [0xff]*width)
         return ""
+    cmd_SET_DISPLAY_GROUP_help = "Set the currently active display group"
+    def cmd_SET_DISPLAY_GROUP(self, gcmd):
+        group = gcmd.get('GROUP')
+        new_dg = self.display_data_groups.get(group)
+        if new_dg is None:
+            raise gcmd.error("Unknown display_data group '%s'" % (group,))
+        self.show_data_group = new_dg
 
 def load_config(config):
     return PrinterLCD(config)
